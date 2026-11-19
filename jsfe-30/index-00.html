@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>jsfe</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app-layout">
+    <div id="editor-pane">
+      <button id="btnrun">run</button>
+      <textarea id="txtinput" rows="16" cols="40">
+
+(= count 0)
+
+(= draw (fn ()
+  (gui-clear)
+  (gui-begin "Button Test" 16 16 260 140)
+  (gui-label (do (print "count:" count) count))
+  (if (gui-button "Increment")
+    (= count (+ count 1)))
+  (gui-end)))
+
+        </textarea>
+      <textarea id="txtoutput" rows="10" cols="40"></textarea>
+    </div>
+
+    <div id="gui-pane"></div>
+  </div>
+
+  <script src="fe.js"></script>
+  <script src="imgui.js"></script>
+  <script src="os.js"></script>
+</body>
+</html>

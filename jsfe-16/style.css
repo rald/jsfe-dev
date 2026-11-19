@@ -1,0 +1,65 @@
+/* Simple dark mode theme for jsfe */
+:root {
+  --bg-page: #0f1117;
+  --bg-surface: #181b24;
+  --bg-button: #252a38;
+  --bg-button-hover: #32394c;
+  --bg-button-active: #1d212c;
+  --text-primary: #e6e9f0;
+  --text-muted: #9aa2b6;
+  --border-subtle: #2b3040;
+  --focus-ring: #6ea8fe;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 20px;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+#btnrun {
+  background-color: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+#btnrun:hover {
+  background-color: var(--bg-button-hover);
+}
+
+#btnrun:active {
+  background-color: var(--bg-button-active);
+}
+
+#btnrun:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+textarea {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+#txtoutput {
+  color: var(--text-muted);
+}
