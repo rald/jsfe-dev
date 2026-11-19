@@ -1,7 +1,7 @@
 /**
  * imgui.js — Minimalist Immediate Mode GUI for jsfe (`fe.js`)
  * Supports:
- *   gui-clear, gui-begin, gui-end, gui-label, gui-button,
+ *   gui-clear, gui-begin, gui-end, gui-anchor, gui-label, gui-button,
  *   gui-slider, gui-checkbox, gui-text, gui-textarea
  */
 (function (global) {
@@ -81,11 +81,15 @@
     this._fieldRects = {}; // id -> { boxX, boxY, boxW, boxH, type, lineH }
     this._dragFieldScroll = null; // { id, axis: "x"|"y", offset }
 
-    // Window management state (keyed by window title)
+    // Window management & resizing state (keyed by window title)
     this._windows = {}; // winId -> { x, y, w, h, minimized, maximized, closed, prevRect, initialized }
     this._dragWindow = null; // { winId, startMouseX, startMouseY, startWinX, startWinY }
+    this._resizeWindow = null; // { winId, edge: "corner"|"right"|"bottom", startMouseX, startMouseY, startW, startH }
     this._currentWinId = null;
     this._currentWinSkipped = false;
+
+    // Widget anchor state for current window
+    this._anchor = null; // { pos: string, offsetX: number, offsetY: number } | null
 
     // Frame interaction state
     this.hotId = null;
@@ -605,10 +609,11 @@
       self._dragFieldScroll = null;
       self._dragSelect = null;
       self._dragWindow = null;
+      self._resizeWindow = null;
     });
 
     global.addEventListener("mousemove", function (e) {
-      if (self._dragSelect || self._dragWindow) {
+      if (self._dragSelect || self._dragWindow || self._resizeWindow) {
         self._updatePointerPos(e);
       }
     });
@@ -665,6 +670,65 @@
     );
   };
 
+  /**
+   * Sets the widget anchor for subsequent widgets in the current window.
+   * Supported `pos`:
+   *   "top-left" | "top-center" | "top-right" |
+   *   "left"     | "center"     | "right"     |
+   *   "bottom-left" | "bottom-center" | "bottom-right" |
+   *   "none" | null
+   */
+  MiniImGui.prototype.setAnchor = function (pos, offsetX, offsetY) {
+    if (!pos || String(pos).toLowerCase() === "none") {
+      this._anchor = null;
+      return;
+    }
+    this._anchor = {
+      pos: String(pos).toLowerCase(),
+      offsetX: typeof offsetX === "number" ? offsetX : 0,
+      offsetY: typeof offsetY === "number" ? offsetY : 0
+    };
+  };
+
+  /**
+   * Computes (x, y) for a widget of size (w, h) using active anchor if set,
+   * otherwise returns current (cursorX, cursorY).
+   */
+  MiniImGui.prototype._resolveWidgetPos = function (w, h) {
+    if (!this._anchor) {
+      return { x: this.cursorX, y: this.cursorY };
+    }
+    var pad = 10;
+    var clientX = this.winX + pad;
+    var clientY = this.winY + this.titleBarH + pad;
+    var clientW = Math.max(20, this.winW - pad * 2);
+    var clientH = Math.max(20, this.winH - this.titleBarH - pad * 2);
+
+    var pos = this._anchor.pos;
+    var x = this.cursorX;
+    var y = this.cursorY;
+
+    if (pos.indexOf("left") !== -1) {
+      x = clientX;
+    } else if (pos.indexOf("right") !== -1) {
+      x = clientX + Math.max(0, clientW - w);
+    } else if (pos === "top-center" || pos === "center" || pos === "bottom-center") {
+      x = clientX + Math.max(0, Math.floor((clientW - w) / 2));
+    }
+
+    if (pos.indexOf("top") !== -1) {
+      y = clientY;
+    } else if (pos.indexOf("bottom") !== -1) {
+      y = clientY + Math.max(0, clientH - h);
+    } else if (pos === "left" || pos === "center" || pos === "right") {
+      y = clientY + Math.max(0, Math.floor((clientH - h) / 2));
+    }
+
+    x += this._anchor.offsetX;
+    y += this._anchor.offsetY;
+    return { x: x, y: y };
+  };
+
   MiniImGui.prototype._getWindowState = function (winId, defaultX, defaultY, defaultW, defaultH) {
     if (!Object.prototype.hasOwnProperty.call(this._windows, winId)) {
       this._windows[winId] = {
@@ -691,6 +755,7 @@
 
   MiniImGui.prototype.beginWindow = function (title, x, y, w, h) {
     this.frameCount++;
+    this._anchor = null;
     var winTitle = String(title || "Window");
     var winId = "win:" + winTitle;
     this._currentWinId = winId;
@@ -706,6 +771,25 @@
     if (wState.closed) {
       this._currentWinSkipped = true;
       return;
+    }
+
+    var minWinW = 160;
+    var minWinH = 80;
+
+    // Handle active window resize drag
+    if (this._resizeWindow && this._resizeWindow.winId === winId && this.mouseDown && !wState.maximized) {
+      var rdx = this.mouseX - this._resizeWindow.startMouseX;
+      var rdy = this.mouseY - this._resizeWindow.startMouseY;
+      var edge = this._resizeWindow.edge;
+      if (edge === "corner" || edge === "right") {
+        var maxW = Math.max(minWinW, this.width - wState.x - 4);
+        wState.w = Math.max(minWinW, Math.min(maxW, this._resizeWindow.startW + rdx));
+      }
+      if (edge === "corner" || edge === "bottom") {
+        var maxH = Math.max(minWinH, this.height - wState.y - 4);
+        wState.h = Math.max(minWinH, Math.min(maxH, this._resizeWindow.startH + rdy));
+      }
+      wState.minimized = false;
     }
 
     // Handle active titlebar drag
@@ -734,6 +818,14 @@
     this.winH = drawH;
     this.cursorX = this.winX + 10;
     this.cursorY = this.winY + this.titleBarH + 10;
+
+    // Resize hit regions (when not minimized or maximized)
+    var canResize = !wState.minimized && !wState.maximized;
+    var gripSize = 14;
+    var edgePad = 6;
+    var cornerHover = canResize && this._hit(this.winX + this.winW - gripSize, this.winY + this.winH - gripSize, gripSize, gripSize);
+    var rightEdgeHover = canResize && !cornerHover && this._hit(this.winX + this.winW - edgePad, this.winY + this.titleBarH, edgePad + 2, Math.max(0, this.winH - this.titleBarH - gripSize));
+    var bottomEdgeHover = canResize && !cornerHover && this._hit(this.winX + 4, this.winY + this.winH - edgePad, Math.max(0, this.winW - gripSize - 4), edgePad + 2);
 
     var ctx = this.ctx;
     ctx.save();
@@ -765,7 +857,7 @@
     var closeHover = this._hit(closeBtnX, btnY, btnSize, btnSize);
     var anyBtnHover = minHover || maxHover || closeHover;
 
-    var titleBarHover = !anyBtnHover && this._hit(this.winX, this.winY, Math.max(0, minBtnX - this.winX), this.titleBarH);
+    var titleBarHover = !anyBtnHover && !rightEdgeHover && this._hit(this.winX, this.winY, Math.max(0, minBtnX - this.winX), this.titleBarH);
 
     if (this.mouseClicked) {
       if (minHover) {
@@ -792,6 +884,18 @@
         this._currentWinSkipped = true;
         ctx.restore();
         return;
+      } else if (cornerHover || rightEdgeHover || bottomEdgeHover) {
+        this.mouseClicked = false;
+        this.focusedId = null;
+        this.focusType = null;
+        this._resizeWindow = {
+          winId: winId,
+          edge: cornerHover ? "corner" : (rightEdgeHover ? "right" : "bottom"),
+          startMouseX: this.mouseX,
+          startMouseY: this.mouseY,
+          startW: wState.w,
+          startH: wState.h
+        };
       } else if (titleBarHover && !wState.maximized) {
         this.focusedId = null;
         this.focusType = null;
@@ -876,13 +980,38 @@
     if (this._currentWinSkipped) {
       this._currentWinSkipped = false;
       this._currentWinId = null;
+      this._anchor = null;
       this.mouseClicked = false;
       if (!this.mouseDown && this.activeId !== null) {
         this.activeId = null;
       }
       return;
     }
+
+    // Draw bottom-right resize grip over client corner when resizable
+    var wState = this._currentWinId ? this._windows[this._currentWinId] : null;
+    if (wState && !wState.minimized && !wState.maximized) {
+      var ctx = this.ctx;
+      var gx = this.winX + this.winW - 4;
+      var gy = this.winY + this.winH - 4;
+      var isResizingThis = Boolean(this._resizeWindow && this._resizeWindow.winId === this._currentWinId);
+      var gripHovered = this._hit(this.winX + this.winW - 14, this.winY + this.winH - 14, 14, 14);
+      ctx.save();
+      ctx.strokeStyle = (isResizingThis || gripHovered) ? "#8ab4f8" : "#5c6885";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(gx - 8, gy);
+      ctx.lineTo(gx, gy - 8);
+      ctx.moveTo(gx - 5, gy);
+      ctx.lineTo(gx, gy - 5);
+      ctx.moveTo(gx - 2, gy);
+      ctx.lineTo(gx, gy - 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     this._currentWinId = null;
+    this._anchor = null;
     this.ctx.restore();
     this.mouseClicked = false;
     if (!this.mouseDown && this.activeId !== null) {
@@ -892,22 +1021,30 @@
 
   MiniImGui.prototype.label = function (text) {
     if (this._currentWinSkipped) { return; }
-    var x = this.cursorX;
-    var y = this.cursorY;
     var ctx = this.ctx;
-    ctx.fillStyle = "#c8d0e0";
     ctx.font = "12px monospace";
-    ctx.fillText(String(text), x, y + 16);
-    this.cursorY += this.rowHeight + this.gap;
+    var str = String(text);
+    var w = Math.max(40, Math.min(Math.max(80, this.winW - 20), ctx.measureText(str).width + 8));
+    var h = this.rowHeight;
+    var pos = this._resolveWidgetPos(w, h);
+    var x = pos.x;
+    var y = pos.y;
+
+    ctx.fillStyle = "#c8d0e0";
+    ctx.fillText(str, x, y + 16);
+    this.cursorX = x;
+    this.cursorY = y + this.rowHeight + this.gap;
   };
 
-  MiniImGui.prototype.button = function (labelText) {
+  MiniImGui.prototype.button = function (labelText, customW) {
     if (this._currentWinSkipped) { return false; }
     var id = "btn:" + labelText;
-    var x = this.cursorX;
-    var y = this.cursorY;
-    var w = Math.max(80, this.winW - 20);
+    var w = typeof customW === "number" ? customW : Math.max(80, this.winW - 20);
     var h = this.rowHeight;
+    var pos = this._resolveWidgetPos(w, h);
+    var x = pos.x;
+    var y = pos.y;
+
     var hovered = this._hit(x, y, w, h);
     var clicked = false;
     var wasActive = this.activeId === id;
@@ -949,8 +1086,17 @@
     ctx.font = "12px monospace";
     ctx.fillText(String(labelText), x + 10, y + 17);
 
-    this.cursorY += h + this.gap;
+    this._lastWidget = { x: x, y: y, w: w, h: h };
+    this.cursorX = x;
+    this.cursorY = y + h + this.gap;
     return clicked;
+  };
+
+  MiniImGui.prototype.sameLine = function (offsetX) {
+    if (this._currentWinSkipped || !this._lastWidget) { return; }
+    var extra = typeof offsetX === "number" ? offsetX : this.gap;
+    this.cursorX = this._lastWidget.x + this._lastWidget.w + extra;
+    this.cursorY = this._lastWidget.y;
   };
 
   MiniImGui.prototype.slider = function (labelText, value, minVal, maxVal) {
@@ -960,10 +1106,12 @@
     var max = typeof maxVal === "number" ? maxVal : 100;
     var val = typeof value === "number" ? value : min;
 
-    var x = this.cursorX;
-    var y = this.cursorY;
     var w = Math.max(80, this.winW - 20);
     var h = this.rowHeight;
+    var pos = this._resolveWidgetPos(w, h);
+    var x = pos.x;
+    var y = pos.y;
+
     var hovered = this._hit(x, y, w, h);
 
     if (hovered) {
@@ -1001,7 +1149,8 @@
     ctx.font = "12px monospace";
     ctx.fillText(labelText + ": " + val, x + 8, y + 17);
 
-    this.cursorY += h + this.gap;
+    this.cursorX = x;
+    this.cursorY = y + h + this.gap;
     return val;
   };
 
@@ -1009,10 +1158,12 @@
     if (this._currentWinSkipped) { return Boolean(checked); }
     var id = "chk:" + labelText;
     var isChecked = Boolean(checked);
-    var x = this.cursorX;
-    var y = this.cursorY;
     var w = Math.max(80, this.winW - 20);
     var h = this.rowHeight;
+    var pos = this._resolveWidgetPos(w, h);
+    var x = pos.x;
+    var y = pos.y;
+
     var hovered = this._hit(x, y, w, h);
 
     if (hovered) {
@@ -1043,7 +1194,8 @@
     ctx.font = "12px monospace";
     ctx.fillText(String(labelText), x + 26, y + 17);
 
-    this.cursorY += h + this.gap;
+    this.cursorX = x;
+    this.cursorY = y + h + this.gap;
     return isChecked;
   };
 
@@ -1053,10 +1205,11 @@
     var incoming = value !== undefined && value !== null ? String(value) : "";
     var self = this;
 
-    var x = this.cursorX;
-    var y = this.cursorY;
     var w = Math.max(100, this.winW - 20);
     var h = this.rowHeight;
+    var pos = this._resolveWidgetPos(w, h);
+    var x = pos.x;
+    var y = pos.y;
     var prefix = labelText ? (labelText + ": ") : "";
 
     var isFocused = this.focusedId === id && this.focusType === "text";
@@ -1209,7 +1362,8 @@
     }
     ctx.restore();
 
-    this.cursorY += h + this.gap;
+    this.cursorX = x;
+    this.cursorY = y + h + this.gap;
     return text;
   };
 
@@ -1221,10 +1375,11 @@
     var headerH = labelText ? 18 : 0;
     var sb = this.scrollbarSize;
 
-    var x = this.cursorX;
-    var y = this.cursorY;
     var w = Math.max(120, this.winW - 20);
     var totalH = (typeof areaHeight === "number" ? areaHeight : 96) + headerH;
+    var pos = this._resolveWidgetPos(w, totalH);
+    var x = pos.x;
+    var y = pos.y;
     var boxY = y + headerH;
     var boxH = Math.max(40, totalH - headerH);
 
@@ -1287,7 +1442,6 @@
       ? Math.floor((sc.x / maxScrollX) * Math.max(0, hTrackW - hThumbW))
       : 0);
 
-    // Handle ordinary scrollbar interactions (thumb drag, track page jump, hover)
     var vTrackRange = Math.max(1, vTrackH - vThumbH);
     var hTrackRange = Math.max(1, hTrackW - hThumbW);
     var vHovered = hasVScroll && this._hit(vTrackX, vTrackY, sb, vTrackH);
@@ -1313,7 +1467,6 @@
         };
         vDragging = true;
       } else {
-        // Ordinary track click: page up or page down
         var pageStepY = Math.max(lineH * 2, innerH - lineH);
         if (this.mouseY < vThumbY) {
           sc.y = Math.max(0, sc.y - pageStepY);
@@ -1337,7 +1490,6 @@
         };
         hDragging = true;
       } else {
-        // Ordinary track click: page left or page right
         var pageStepX = Math.max(40, innerW - 24);
         if (this.mouseX < hThumbX) {
           sc.x = Math.max(0, sc.x - pageStepX);
@@ -1396,7 +1548,6 @@
 
         var clickedPos = computePosFromPointer(this.mouseX, this.mouseY);
         if (isDoubleClick) {
-          // Select word around clickedPos
           var wStart = clickedPos;
           var wEnd = clickedPos;
           while (wStart > 0 && /[A-Za-z0-9_.-]/.test(text.charAt(wStart - 1))) {
@@ -1458,7 +1609,6 @@
     var caretPixelYTop = caretLineIdx * lineH;
     var caretPixelYBot = caretPixelYTop + lineH;
 
-    // Auto-scroll caret into view only when caret just moved/typed and user isn't dragging scrollbar
     if (!vDragging && !hDragging && this._caretMovedFlag[id]) {
       this._caretMovedFlag[id] = false;
       if (caretPixelYBot - sc.y > innerH) {
@@ -1510,7 +1660,6 @@
     ctx.rect(textAreaRectX, textAreaRectY, innerW, innerH);
     ctx.clip();
 
-    // Draw selection highlight if text is selected
     var selRange = isFocused ? this._getSelectionRange(id, text.length) : null;
     if (selRange) {
       var startInfo = this._lineColFromPos(text, selRange.start);
@@ -1556,7 +1705,6 @@
     }
     ctx.restore();
 
-    // Vertical scrollbar on textarea
     if (hasVScroll) {
       ctx.fillStyle = "#12161f";
       ctx.fillRect(vTrackX, vTrackY, sb, vTrackH);
@@ -1568,7 +1716,6 @@
       ctx.fillRect(vTrackX + 1, vThumbY, sb - 2, Math.max(12, vThumbH));
     }
 
-    // Horizontal scrollbar on textarea
     if (hasHScroll) {
       ctx.fillStyle = "#12161f";
       ctx.fillRect(hTrackX, hTrackY, hTrackW, sb);
@@ -1585,7 +1732,8 @@
       ctx.fillRect(x + w - sb, boxY + boxH - sb, sb, sb);
     }
 
-    this.cursorY += totalH + this.gap;
+    this.cursorX = x;
+    this.cursorY = y + totalH + this.gap;
     return text;
   };
 
@@ -1611,13 +1759,23 @@
       return null;
     });
 
+    feCtx.define("gui-anchor", function (_ctx, pos, offsetX, offsetY) {
+      gui.setAnchor(pos, offsetX, offsetY);
+      return null;
+    });
+
     feCtx.define("gui-label", function (_ctx, text) {
       gui.label(text);
       return null;
     });
 
-    feCtx.define("gui-button", function (_ctx, text) {
-      return gui.button(text);
+    feCtx.define("gui-button", function (_ctx, text, customW) {
+      return gui.button(text, customW);
+    });
+
+    feCtx.define("gui-same-line", function (_ctx, offsetX) {
+      gui.sameLine(offsetX);
+      return null;
     });
 
     feCtx.define("gui-slider", function (_ctx, text, val, minVal, maxVal) {
