@@ -1,0 +1,86 @@
+; ============================================================================
+; imgui.fe — Minimal Immediate-Mode GUI Library in fe Lisp
+; Includes immediate-mode desktop & SVG icon program launcher widgets.
+; ============================================================================
+
+(= imgui-state (list 'imgui-ctx
+  (list 'hot nil)
+  (list 'active nil)
+  (list 'focus nil)
+  (list 'widgets nil)
+  (list 'dark-mode t)
+  (list 'theme (list 'theme
+    (list 'mode 'dark)
+    (list 'bg "#0d1117")
+    (list 'panel "#161b22")
+    (list 'accent "#58a6ff")
+    (list 'text "#e6edf3")
+    (list 'border "#30363d")))))
+
+(= imgui/begin-frame (fn (title w h)
+  (= imgui-state
+    (list 'imgui-ctx
+      (list 'hot nil)
+      (list 'active (ui/dict-get imgui-state 'active nil))
+      (list 'focus (ui/dict-get imgui-state 'focus nil))
+      (list 'widgets nil)
+      (list 'dark-mode t)
+      (list 'theme (ui/dict-get imgui-state 'theme nil))
+      (list 'window (list 'window title w h))))
+  (list 'frame-begin title w h)))
+
+(= imgui/set-hot (fn (id)
+  (let st imgui-state)
+  (let cur-active (ui/dict-get st 'active nil))
+  (if (not cur-active)
+      (= imgui-state (ui/dict-set st 'hot id)))
+  id))
+
+(= imgui/emit (fn (node)
+  (let st imgui-state)
+  (let ws (ui/dict-get st 'widgets nil))
+  (= imgui-state (ui/dict-set st 'widgets (ui/append ws node)))
+  node))
+
+(= imgui/label (fn (id text)
+  (imgui/emit (list 'widget 'label id text))))
+
+(= imgui/button (fn (id label on-click)
+  (imgui/set-hot id)
+  (imgui/emit (list 'widget 'button id label on-click))))
+
+(= imgui/icon-launcher (fn (id svg-markup title on-launch)
+  (imgui/set-hot id)
+  (let is-hot (is (ui/dict-get imgui-state 'hot nil) id))
+  (imgui/emit (list 'widget 'icon-launcher id svg-markup title (list 'hot is-hot) on-launch))))
+
+(= imgui/desktop (fn (id icons)
+  (imgui/emit (list 'layout 'desktop id icons))))
+
+(= imgui/textarea (fn (id content cursor-line cursor-col on-change)
+  (imgui/set-hot id)
+  (imgui/emit (list 'widget 'textarea id content cursor-line cursor-col on-change))))
+
+(= imgui/list-box (fn (id items selected-idx on-select)
+  (imgui/set-hot id)
+  (imgui/emit (list 'widget 'list-box id items selected-idx on-select))))
+
+(= imgui/hsplit (fn (id ratio left-node right-node)
+  (imgui/emit (list 'layout 'hsplit id ratio left-node right-node))))
+
+(= imgui/vstack (fn (id children)
+  (imgui/emit (list 'layout 'vstack id children))))
+
+(= imgui/status-bar (fn (id left-text right-text)
+  (imgui/emit (list 'widget 'status-bar id left-text right-text))))
+
+(= imgui/end-frame (fn ()
+  (let st imgui-state)
+  (let win (ui/dict-get st 'window (list 'window "fe WebOS" 1024 640)))
+  (let ws (ui/dict-get st 'widgets nil))
+  (let tree (list 'ui-tree win ws (list 'dark-mode t)))
+  (if (host/has-renderer)
+      (host/render-imgui tree))
+  tree))
+
+(print "Loaded imgui.fe")

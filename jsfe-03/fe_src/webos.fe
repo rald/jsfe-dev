@@ -1,0 +1,60 @@
+; ============================================================================
+; webos.fe — WebOS Shell & Application Controller
+; Coordinates imgui.fe, fs.fe, and edit.fe in S-expression format.
+; ============================================================================
+
+(= webos-app (list 'webos-app
+  (list 'active-app 'edit)
+  (list 'booted nil)
+  (list 'desktop-items
+    (list
+      (list 'app 'edit "EDIT.COM (S-Expr Editor)")
+      (list 'app 'fs-explorer "FS.FE (S-Expr Explorer)")
+      (list 'app 'sys-info "SYSINFO (VM & DB Status)")))))
+
+(= webos/boot (fn ()
+  (fs/boot)
+  ; Seed starter S-expression files if empty
+  (if (not (fs/read-file "/hello.fe"))
+      (fs/write-file "/hello.fe"
+        "(do\n  (print \"Welcome to fe WebOS!\")\n  (list 'os 'fe-lisp 'storage 'sqlite-sexpr))"))
+  (if (not (fs/read-file "/fibonacci.fe"))
+      (fs/write-file "/fibonacci.fe"
+        "(= fib (fn (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))\n(fib 8)"))
+  (= webos-app (ui/dict-set webos-app 'booted t))
+  (edit/cmd-open "/hello.fe")
+  (webos/render)))
+
+(= webos/switch-app (fn (app-name)
+  (= webos-app (ui/dict-set webos-app 'active-app app-name))
+  (webos/render)))
+
+(= webos/render (fn ()
+  (let current (ui/dict-get webos-app 'active-app 'edit))
+  (if (is current 'edit)
+      (edit/render)
+      (if (is current 'fs-explorer)
+          (webos/render-fs-explorer)
+          (webos/render-sysinfo)))))
+
+(= webos/render-fs-explorer (fn ()
+  (imgui/begin-frame "WebOS S-Expression File Explorer" 1024 640)
+  (let entries (fs/list-entries))
+  (imgui/vstack "fs-view"
+    (list
+      (imgui/label "fs-title" "S-Expression Virtual & SQLite Filesystem")
+      (imgui/button "fs-back-edit" "Open in EDIT.COM" (fn () (webos/switch-app 'edit)))
+      (imgui/list-box "fs-entries" entries 0 (fn (p)
+        (edit/cmd-open p)
+        (webos/switch-app 'edit)))))
+  (imgui/end-frame)))
+
+(= webos/render-sysinfo (fn ()
+  (imgui/begin-frame "WebOS System & Architecture Info" 1024 640)
+  (imgui/vstack "sys-view"
+    (list
+      (imgui/label "sys-title" "fe WebOS | OOP + MVC + Design Patterns | Bottle 0.12 + SQLite3")
+      (imgui/button "sys-back-edit" "Return to EDIT.COM" (fn () (webos/switch-app 'edit)))))
+  (imgui/end-frame)))
+
+(print "Loaded webos.fe (WebOS Application Controller)")

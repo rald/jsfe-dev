@@ -1,0 +1,93 @@
+; ============================================================================
+; fs.fe — S-Expression File System Library
+; ============================================================================
+(= fs/-cache nil)
+
+(= fs/normalize-path (fn (p)
+  (if (or (not p) (is p "") (is p "/"))
+      "/"
+      (if (is (str/slice p 0 1) "/")
+          p
+          (str/concat "/" p)))))
+
+(= fs/make-node (fn (path kind content meta)
+  (list 'fs-node
+    (list 'path (fs/normalize-path path))
+    (list 'kind kind)
+    (list 'content content)
+    (list 'meta meta))))
+
+(= fs/node-path (fn (n) (ui/dict-get n 'path "/")))
+(= fs/node-kind (fn (n) (ui/dict-get n 'kind 'file)))
+(= fs/node-content (fn (n) (ui/dict-get n 'content nil)))
+
+(= fs/boot (fn ()
+  (let root (fs/make-node "/" 'dir '() (list 'format 'sexpr)))
+  (= fs/-cache (list root))
+  (if (host/has-fs-api)
+      (let remote (host/fs-list-sexpr))
+      (if remote
+          (= fs/-cache remote)))
+  fs/-cache))
+
+(= fs/write-file (fn (path sexpr-content)
+  (let norm (fs/normalize-path path))
+  (let serialized
+    (if (is (type sexpr-content) 'string)
+        sexpr-content
+        (sexpr/encode sexpr-content)))
+  (let node (fs/make-node norm 'file serialized (list 'format 'sexpr)))
+  (= fs/-cache (fs/-upsert-cache node))
+  (if (host/has-fs-api)
+      (host/fs-save norm 'file serialized))
+  node))
+
+(= fs/read-file (fn (path)
+  (let norm (fs/normalize-path path))
+  (let cached (fs/-find-cache norm))
+  (if cached
+      (fs/node-content cached)
+      (if (host/has-fs-api)
+          (let loaded (host/fs-load norm))
+          (if loaded
+              (do
+                (= fs/-cache (fs/-upsert-cache loaded))
+                (fs/node-content loaded))
+              nil)
+          nil))))
+
+(= fs/list-entries (fn ()
+  (if (host/has-fs-api)
+      (let synced (host/fs-list-sexpr))
+      (if synced
+          (= fs/-cache synced)))
+  fs/-cache))
+
+(= fs/-upsert-cache (fn (new-node)
+  (let target-path (fs/node-path new-node))
+  (let out nil)
+  (let found nil)
+  (let cur fs/-cache)
+  (while cur
+    (let item (car cur))
+    (if (is (fs/node-path item) target-path)
+        (do
+          (= out (ui/append out new-node))
+          (= found t))
+        (= out (ui/append out item)))
+    (= cur (cdr cur)))
+  (if (not found)
+      (= out (ui/append out new-node)))
+  out))
+
+(= fs/-find-cache (fn (target-path)
+  (let cur fs/-cache)
+  (let result nil)
+  (while (and cur (not result))
+    (let item (car cur))
+    (if (is (fs/node-path item) target-path)
+        (= result item))
+    (= cur (cdr cur)))
+  result))
+
+(print "Loaded fs.fe")

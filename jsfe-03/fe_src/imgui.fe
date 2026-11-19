@@ -1,0 +1,113 @@
+; ============================================================================
+; imgui.fe — Minimal Immediate-Mode GUI Library in fe Lisp
+; Uses S-expression declarative/immediate UI trees, OOP-style prototype objects,
+; Observer/Strategy/Command hooks, and MVC view descriptors.
+; ============================================================================
+
+; --- OOP Prototype & Design Pattern Helpers in fe ---
+(= proto-new (fn (parent slots)
+  (list 'proto parent slots)))
+
+(= proto-send (fn (obj method . args)
+  (let m (ui/dict-get obj method nil))
+  (if m
+      (apply m (cons obj args))
+      (let p (car (cdr obj)))
+      (if p (apply proto-send (cons p (cons method args))) nil))))
+
+; --- Immediate Mode Context (Singleton / Registry State) ---
+(= imgui-state (list 'imgui-ctx
+  (list 'hot nil)
+  (list 'active nil)
+  (list 'focus nil)
+  (list 'widgets nil)
+  (list 'theme (list 'theme
+    (list 'bg "#141820")
+    (list 'panel "#1e2430")
+    (list 'accent "#4ea1ff")
+    (list 'text "#e6edf3")
+    (list 'border "#384152")))))
+
+(= imgui/begin-frame (fn (title w h)
+  (= imgui-state
+    (list 'imgui-ctx
+      (list 'hot nil)
+      (list 'active (ui/dict-get imgui-state 'active nil))
+      (list 'focus (ui/dict-get imgui-state 'focus nil))
+      (list 'widgets nil)
+      (list 'theme (ui/dict-get imgui-state 'theme nil))
+      (list 'window (list 'window title w h))))
+  (list 'frame-begin title w h)))
+
+(= imgui/set-hot (fn (id)
+  (let st imgui-state)
+  (let cur-active (ui/dict-get st 'active nil))
+  (if (not cur-active)
+      (= imgui-state (ui/dict-set st 'hot id)))
+  id))
+
+(= imgui/set-active (fn (id)
+  (let st imgui-state)
+  (= imgui-state (ui/dict-set st 'active id))
+  id))
+
+(= imgui/clear-active (fn ()
+  (let st imgui-state)
+  (= imgui-state (ui/dict-set st 'active nil))
+  nil))
+
+(= imgui/emit (fn (node)
+  (let st imgui-state)
+  (let ws (ui/dict-get st 'widgets nil))
+  (= imgui-state (ui/dict-set st 'widgets (ui/append ws node)))
+  node))
+
+; --- Immediate-Mode Widgets returning S-expression UI nodes ---
+(= imgui/label (fn (id text)
+  (imgui/emit (list 'widget 'label id text))))
+
+(= imgui/button (fn (id label on-click)
+  (imgui/set-hot id)
+  (let is-hot (is (ui/dict-get imgui-state 'hot nil) id))
+  (let is-active (is (ui/dict-get imgui-state 'active nil) id))
+  (imgui/emit (list 'widget 'button id label
+    (list 'hot is-hot)
+    (list 'active is-active)
+    (list 'action on-click)))))
+
+(= imgui/text-input (fn (id value placeholder on-change)
+  (imgui/set-hot id)
+  (let is-focused (is (ui/dict-get imgui-state 'focus nil) id))
+  (imgui/emit (list 'widget 'text-input id value placeholder is-focused on-change))))
+
+(= imgui/textarea (fn (id content cursor-line cursor-col on-change)
+  (imgui/set-hot id)
+  (let is-focused (is (ui/dict-get imgui-state 'focus nil) id))
+  (imgui/emit (list 'widget 'textarea id content cursor-line cursor-col is-focused on-change))))
+
+(= imgui/list-box (fn (id items selected-idx on-select)
+  (imgui/set-hot id)
+  (imgui/emit (list 'widget 'list-box id items selected-idx on-select))))
+
+(= imgui/hsplit (fn (id ratio left-node right-node)
+  (imgui/emit (list 'layout 'hsplit id ratio left-node right-node))))
+
+(= imgui/vstack (fn (id children)
+  (imgui/emit (list 'layout 'vstack id children))))
+
+(= imgui/status-bar (fn (id left-text right-text)
+  (imgui/emit (list 'widget 'status-bar id left-text right-text))))
+
+(= imgui/modal (fn (id title body-node actions)
+  (imgui/emit (list 'widget 'modal id title body-node actions))))
+
+(= imgui/end-frame (fn ()
+  (let st imgui-state)
+  (let win (ui/dict-get st 'window (list 'window "WebOS" 1024 640)))
+  (let ws (ui/dict-get st 'widgets nil))
+  (let tree (list 'ui-tree win ws))
+  (if (host/has-renderer)
+      (host/render-imgui tree))
+  tree))
+
+(print "Loaded imgui.fe (Immediate-Mode GUI S-Expr Library)")

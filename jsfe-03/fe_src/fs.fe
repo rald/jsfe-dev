@@ -1,0 +1,150 @@
+; ============================================================================
+; fs.fe — S-Expression File System Library (MVC Model + Repository Pattern)
+; Persists all directories, files, metadata, and code in S-expression format
+; backed by SQLite via Bottle REST API / host bridge.
+; ============================================================================
+
+; --- S-Expr Serialization & Normalization Helpers ---
+(= fs/normalize-path (fn (p)
+  (if (or (not p) (is p "") (is p "/"))
+      "/"
+      (if (is (str/slice p 0 1) "/")
+          p
+          (str/concat "/" p)))))
+
+(= fs/make-node (fn (path kind content meta)
+  (list 'fs-node
+    (list 'path (fs/normalize-path path))
+    (list 'kind kind)           ; 'dir or 'file
+    (list 'content content)     ; S-expr string or list
+    (list 'meta meta))))       ; S-expr metadata list
+
+(= fs/node-path (fn (n) (ui/dict-get n 'path "/")))
+(= fs/node-kind (fn (n) (ui/dict-get n 'kind 'file)))
+(= fs/node-content (fn (n) (ui/dict-get n 'content nil)))
+(= fs/node-meta (fn (n) (ui/dict-get n 'meta nil)))
+
+; --- Observer Registry for FS Change Events ---
+(= fs/-observers nil)
+
+(= fs/subscribe (fn (cb)
+  (= fs/-observers (ui/append fs/-observers cb))
+  cb))
+
+(= fs/-notify (fn (event payload)
+  (let obs fs/-observers)
+  (while obs
+    (let fn-cb (car obs))
+    (fn-cb event payload)
+    (= obs (cdr obs)))
+  t))
+
+; --- In-Memory S-Expr VFS Cache + SQLite Persistence ---
+(= fs/-cache nil)
+
+(= fs/boot (fn ()
+  (let root (fs/make-node "/" 'dir '() (list 'created "boot" 'format 'sexpr)))
+  (= fs/-cache (list root))
+  (if (host/has-fs-api)
+      (let remote-sexpr (host/fs-list-sexpr))
+      (if remote-sexpr
+          (= fs/-cache (fs/-parse-nodes remote-sexpr))))
+  (fs/-notify 'fs-booted fs/-cache)
+  fs/-cache))
+
+(= fs/-parse-nodes (fn (raw)
+  (if (not raw)
+      nil
+      (if (is (type raw) 'string)
+          (eval (read-sexpr raw))
+          raw))))
+
+(= fs/write-file (fn (path sexpr-content)
+  (let norm (fs/normalize-path path))
+  (let serialized
+    (if (is (type sexpr-content) 'string)
+        sexpr-content
+        (sexpr/encode sexpr-content)))
+  (let node (fs/make-node norm 'file serialized (list 'format 'sexpr 'updated (host/now-iso))))
+  (= fs/-cache (fs/-upsert-cache node))
+  (if (host/has-fs-api)
+      (host/fs-save norm 'file serialized))
+  (fs/-notify 'fs-write node)
+  node))
+
+(= fs/mkdir (fn (path)
+  (let norm (fs/normalize-path path))
+  (let node (fs/make-node norm 'dir '() (list 'format 'sexpr 'created (host/now-iso))))
+  (= fs/-cache (fs/-upsert-cache node))
+  (if (host/has-fs-api)
+      (host/fs-save norm 'dir "()"))
+  (fs/-notify 'fs-mkdir node)
+  node))
+
+(= fs/read-file (fn (path)
+  (let norm (fs/normalize-path path))
+  (let cached (fs/-find-cache norm))
+  (if cached
+      (fs/node-content cached)
+      (if (host/has-fs-api)
+          (let loaded (host/fs-load norm))
+          (if loaded
+              (do
+                (= fs/-cache (fs/-upsert-cache loaded))
+                (fs/node-content loaded))
+              nil)
+          nil))))
+
+(= fs/delete-path (fn (path)
+  (let norm (fs/normalize-path path))
+  (= fs/-cache (fs/-remove-cache norm))
+  (if (host/has-fs-api)
+      (host/fs-delete norm))
+  (fs/-notify 'fs-delete norm)
+  t))
+
+(= fs/list-entries (fn ()
+  (if (host/has-fs-api)
+      (let synced (host/fs-list-sexpr))
+      (if synced
+          (= fs/-cache (fs/-parse-nodes synced)))))
+  fs/-cache))
+
+(= fs/-upsert-cache (fn (new-node)
+  (let target-path (fs/node-path new-node))
+  (let out nil)
+  (let found nil)
+  (let cur fs/-cache)
+  (while cur
+    (let item (car cur))
+    (if (is (fs/node-path item) target-path)
+        (do
+          (= out (ui/append out new-node))
+          (= found t))
+        (= out (ui/append out item)))
+    (= cur (cdr cur)))
+  (if (not found)
+      (= out (ui/append out new-node)))
+  out))
+
+(= fs/-find-cache (fn (target-path)
+  (let cur fs/-cache)
+  (let result nil)
+  (while (and cur (not result))
+    (let item (car cur))
+    (if (is (fs/node-path item) target-path)
+        (= result item))
+    (= cur (cdr cur)))
+  result))
+
+(= fs/-remove-cache (fn (target-path)
+  (let out nil)
+  (let cur fs/-cache)
+  (while cur
+    (let item (car cur))
+    (if (not (is (fs/node-path item) target-path))
+        (= out (ui/append out item)))
+    (= cur (cdr cur)))
+  out))
+
+(print "Loaded fs.fe (S-Expression File System Library)")
