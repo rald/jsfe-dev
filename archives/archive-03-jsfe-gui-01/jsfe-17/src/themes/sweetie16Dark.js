@@ -1,0 +1,23 @@
+export const SWEETIE_16_THEME = {
+  bg: '#1a1c2c',
+  bgHover: '#29366f',
+  bgActive: '#3b5dc9',
+  surface: '#333c57',
+  surfaceAlt: '#29366f',
+  gutterBg: '#1a1c2c',
+  gutterText: '#73eff7',
+  border: '#566c86',
+  borderBright: '#73eff7',
+  accent: '#41a6f6',
+  text: '#f4f4f4',
+  textMuted: '#94b0c2',
+  cursorColor: '#ffcd75',
+  selectionBg: 'rgba(255, 205, 117, 0.28)',
+  danger: '#b13e53',
+  warning: '#ffcd75',
+  success: '#38b764',
+  radius: 4,
+  font: '14px "Courier New", Courier, monospace',
+  uiFont: '13px "Courier New", Courier, monospace',
+  titleFont: 'bold 12px "Courier New", Courier, monospace'
+};

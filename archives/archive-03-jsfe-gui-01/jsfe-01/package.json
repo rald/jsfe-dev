@@ -1,0 +1,12 @@
+{
+  "name": "gui-js",
+  "version": "1.3.0",
+  "description": "Minimal retained-mode HTML5 Canvas GUI framework using OOP, MVC, and Design Patterns, plus EDIT.COM clone",
+  "main": "src/gui.js",
+  "type": "module",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "keywords": ["canvas", "gui", "retained-mode", "mvc", "oop", "window", "menu", "edit.com"],
+  "license": "MIT"
+}
