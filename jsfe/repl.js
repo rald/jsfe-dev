@@ -1,110 +1,97 @@
-const txtinput = document.getElementById("txtinput");
-const txtoutput = document.getElementById("txtoutput");
-const btnrun = document.getElementById("btnrun");
-const guiPane = document.getElementById("gui-pane");
+class FeRepl {
+  constructor(inputEl, outputEl) {
+    this.txtinput = inputEl;
+    this.txtoutput = outputEl;
+    this.rafId = null;
 
-let rafId = null;
-
-const appendOutput = (line) => {
-  if (!txtoutput) return;
-  txtoutput.value += line + "\n";
-  txtoutput.scrollTop = txtoutput.scrollHeight;
-};
-
-const fe = new FeContext({
-  onPrint: (text) => {
-    console.log(text);
-    appendOutput(`[print] ${text}`);
-  }
-});
-
-const imgui = typeof attachImGuiToFe === "function"
-  ? attachImGuiToFe(
-      fe,
-      new MiniImGui({ fullscreen: false, fillContainer: true }),
-      guiPane
-    )
-  : null;
-
-function formatLoc(err, stream) {
-  const line = err && err.line != null ? err.line : (stream && stream.line != null ? stream.line : "?");
-  const col = err && err.col != null ? err.col : (stream && stream.col != null ? stream.col : "?");
-  return `${line}:${col}`;
-}
-
-function startFrameLoop() {
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId);
-    rafId = null;
+    this.fe = new FeContext({
+      onPrint: (text) => {
+        console.log(text);
+        this.appendOutput(`[print] ${text}`);
+      }
+    });
   }
 
-  const drawSym = fe.symbol("draw");
-  const drawFn = fe.get(drawSym);
-  if (!drawFn || drawFn.type !== FE_TYPE.FUNC) return;
+  appendOutput(line) {
+    if (!this.txtoutput) return;
+    this.txtoutput.value += line + "\n";
+    this.txtoutput.scrollTop = this.txtoutput.scrollHeight;
+  }
 
-  const stepFrame = () => {
+  formatLoc(err, stream) {
+    const line = err && err.line != null ? err.line : (stream && stream.line != null ? stream.line : "?");
+    const col = err && err.col != null ? err.col : (stream && stream.col != null ? stream.col : "?");
+    return `${line}:${col}`;
+  }
+
+  startFrameLoop() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    const drawSym = this.fe.symbol("draw");
+    const drawFn = this.fe.get(drawSym);
+    if (!drawFn || drawFn.type !== FE_TYPE.FUNC) return;
+
+    const stepFrame = () => {
+      try {
+        const currentDraw = this.fe.get(drawSym);
+        if (!currentDraw || (currentDraw.type !== FE_TYPE.FUNC && currentDraw.type !== FE_TYPE.CFUNC && currentDraw.type !== FE_TYPE.PRIM)) {
+          this.rafId = null;
+          return;
+        }
+        this.fe.calllist = this.fe.nil;
+        this.fe.eval(this.fe.cons(drawSym, this.fe.nil));
+        this.rafId = requestAnimationFrame(stepFrame);
+      } catch (err) {
+        this.fe.calllist = this.fe.nil;
+        this.rafId = null;
+        const msg = err && err.message ? err.message : String(err);
+        this.appendOutput(`Frame Error: ${msg}`);
+      }
+    };
+
+    this.rafId = requestAnimationFrame(stepFrame);
+  }
+
+  run() {
+    if (!this.txtinput || !this.txtoutput) return;
+    this.txtoutput.value = "";
+
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+
+    this.fe._resetLookahead();
+    this.fe.calllist = this.fe.nil;
+    const stream = new StringStream(this.txtinput.value);
+    let step = 1;
+
     try {
-      const currentDraw = fe.get(drawSym);
-      if (!currentDraw || (currentDraw.type !== FE_TYPE.FUNC && currentDraw.type !== FE_TYPE.CFUNC && currentDraw.type !== FE_TYPE.PRIM)) {
-        rafId = null;
-        return;
+      let expr;
+      while ((expr = this.fe.read(stream)) !== null) {
+        const sourceExpr = this.fe.toString(expr, true);
+        const exprLoc = expr.line != null && expr.col != null ? ` @ ${expr.line}:${expr.col}` : "";
+        const result = this.fe.eval(expr);
+        this.appendOutput(`Step ${step}${exprLoc}: ${sourceExpr} => ${this.fe.toString(result, true)}`);
+        step++;
       }
-      if (imgui && typeof imgui.resizeToContainer === "function") {
-        imgui.resizeToContainer();
-      }
-      fe.calllist = fe.nil;
-      fe.eval(fe.cons(drawSym, fe.nil));
-      rafId = requestAnimationFrame(stepFrame);
+      this.startFrameLoop();
     } catch (err) {
-      fe.calllist = fe.nil;
-      rafId = null;
+      this.fe.calllist = this.fe.nil;
+      const loc = this.formatLoc(err, stream);
       const msg = err && err.message ? err.message : String(err);
-      appendOutput(`Frame Error: ${msg}`);
-    }
-  };
-
-  rafId = requestAnimationFrame(stepFrame);
-}
-
-function dorun() {
-  if (!txtinput || !txtoutput) return;
-  txtoutput.value = "";
-
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId);
-    rafId = null;
-  }
-
-  if (imgui && typeof imgui.resizeToContainer === "function") {
-    imgui.resizeToContainer();
-  }
-
-  fe._resetLookahead();
-  fe.calllist = fe.nil;
-  const stream = new StringStream(txtinput.value);
-  let step = 1;
-
-  try {
-    let expr;
-    while ((expr = fe.read(stream)) !== null) {
-      const sourceExpr = fe.toString(expr, true);
-      const exprLoc = expr.line != null && expr.col != null ? ` @ ${expr.line}:${expr.col}` : "";
-      const result = fe.eval(expr);
-      appendOutput(`Step ${step}${exprLoc}: ${sourceExpr} => ${fe.toString(result, true)}`);
-      step++;
-    }
-    startFrameLoop();
-  } catch (err) {
-    fe.calllist = fe.nil;
-    const loc = formatLoc(err, stream);
-    const msg = err && err.message ? err.message : String(err);
-    appendOutput(`Error at ${loc} (Step ${step}): ${msg}`);
-    if (err && Array.isArray(err.trace) && err.trace.length > 0) {
-      appendOutput(`Trace: ${err.trace.join(" <- ")}`);
+      this.appendOutput(`Error at ${loc}: ${msg}`);
     }
   }
 }
 
-if (btnrun) {
-  btnrun.onclick = dorun;
-}
+// Initialization
+const repl = new FeRepl(
+  document.getElementById("txtinput"),
+  document.getElementById("txtoutput")
+);
+
+document.getElementById("btnrun")?.addEventListener("click", () => repl.run());
