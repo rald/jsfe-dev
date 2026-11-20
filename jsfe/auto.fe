@@ -1,0 +1,7 @@
+(load "demo.fe")
+(load "code.fe")
+
+(= draw (fn ()
+  (gui-clear)
+  (draw-demo)
+  (draw-code)))

@@ -1,0 +1,40 @@
+(= showDemo nil)
+(= prevShowDemo nil)
+(= count 0)
+(= speed 25)
+(= active t)
+(= title "ImGuiDemo")
+(= notes "Hello from ImGuiDemo")
+
+(= demoSvg "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='#eef2fa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='2' y='2' width='5' height='5' rx='1'/><rect x='9' y='2' width='5' height='5' rx='1'/><rect x='2' y='9' width='5' height='5' rx='1'/><path d='M11.5 9v5M9 11.5h5'/></svg>")
+
+(= draw-demo (fn ()
+  ;; Icon placed directly on the canvas at (16, 16)
+  (= showDemo (gui-launcher "ImGuiDemo" demoSvg showDemo 34 16 16))
+
+  ;; ImGuiDemo window associated with the launcher
+  (if showDemo
+    (do
+      (if (not prevShowDemo)
+        (gui-reopen "ImGuiDemo"))
+      (gui-begin "ImGuiDemo" 16 54 420 460)
+      (gui-label (if active "Status: Active" "Status: Paused"))
+      (= active (gui-checkbox "Enabled" active))
+      (= speed (gui-slider "Speed" speed 0 100))
+      (= title (gui-text "Title" title))
+      (= notes (gui-textarea "Notes" notes 120))
+      (= rowGap 6)
+      (= btnW (/ (- (gui-win-w) rowGap) 2))
+      (if (gui-button "Increment" btnW)
+        (= count (+ count 1)))
+      (gui-same-line rowGap)
+      (if (gui-button "Reset" btnW)
+        (= count 0))
+      (gui-label (if active
+        (do (print "count:" count "speed:" speed) "Logging...")
+        "Idle"))
+      (gui-end)
+      (if (not (gui-visible? "ImGuiDemo"))
+        (= showDemo nil))))
+
+  (= prevShowDemo showDemo)))

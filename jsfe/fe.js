@@ -122,6 +122,66 @@
       var primObj = new FeObject(FE_TYPE.PRIM, null, i);
       this.set(this.symbol(PRIM_NAMES[i]), primObj);
     }
+
+    function readSourceFile(ctx, filePath, line, col) {
+      if (typeof XMLHttpRequest !== "undefined") {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", filePath, false);
+        try {
+          xhr.send(null);
+        } catch (e) {
+          ctx.error("failed to load \"" + filePath + "\": " + (e && e.message ? e.message : String(e)), line, col);
+        }
+        if ((xhr.status === 200 || xhr.status === 0) && typeof xhr.responseText === "string") {
+          return xhr.responseText;
+        }
+        ctx.error("failed to load \"" + filePath + "\" (status " + xhr.status + ")", line, col);
+      }
+
+      if (typeof require === "function") {
+        try {
+          var fs = require("fs");
+          return fs.readFileSync(filePath, "utf8");
+        } catch (err) {
+          ctx.error("failed to load \"" + filePath + "\": " + (err && err.message ? err.message : String(err)), line, col);
+        }
+      }
+
+      ctx.error("load is not supported in this environment", line, col);
+    }
+
+    this.defineRaw("load", function (ctx, argsPair) {
+      var argState = {
+        list: argsPair,
+        line: argsPair && argsPair.line !== undefined ? argsPair.line : null,
+        col: argsPair && argsPair.col !== undefined ? argsPair.col : null
+      };
+      var pathObj = ctx.checkType(ctx.nextArg(argState), FE_TYPE.STRING);
+      var filePath = pathObj.cdr;
+      var source = readSourceFile(ctx, filePath, pathObj.line, pathObj.col);
+
+      var savedNextChr = ctx.nextchr;
+      var savedNextLine = ctx.nextline;
+      var savedNextCol = ctx.nextcol;
+
+      ctx._resetLookahead();
+      var stream = new StringStream(source);
+      var result = ctx.nil;
+
+      try {
+        var expr;
+        while ((expr = ctx.read(stream)) !== null) {
+          result = ctx.eval(expr);
+        }
+      } finally {
+        ctx.nextchr = savedNextChr;
+        ctx.nextline = savedNextLine;
+        ctx.nextcol = savedNextCol;
+      }
+
+      return result;
+    });
+
   }
 
   FeContext.prototype._resetLookahead = function () {

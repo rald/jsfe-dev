@@ -1,0 +1,57 @@
+(= showEditor nil)
+(= prevShowEditor nil)
+(= filename "main.fe")
+(= code "(+ 1 2)\n(print \"Hello from code.fe\")")
+(= wordWrap t)
+(= status "Ready")
+(= runCount 0)
+
+(= editorSvg "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='#eef2fa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='5 4 1.5 8 5 12'/><polyline points='11 4 14.5 8 11 12'/><line x1='9.5' y1='3' x2='6.5' y2='13'/></svg>")
+
+(= draw-code (fn ()
+  ;; Icon placed directly on the canvas at (60, 16)
+  (= showEditor (gui-launcher "CodeEditor" editorSvg showEditor 34 60 16))
+
+  (if showEditor
+    (do
+      (if (not prevShowEditor)
+        (gui-reopen "CodeEditor"))
+      (gui-begin "CodeEditor" 16 54 440 480)
+
+      (= filename (gui-text "File" filename))
+      (= wordWrap (gui-checkbox "Echo buffer on Run" wordWrap))
+      (= code (gui-textarea "Source" code 240))
+
+      (= rowGap 6)
+      (= colGap 6)
+      (= btnW (/ (- (gui-win-w) (* rowGap 2)) 3))
+
+      (if (gui-button "Run" btnW)
+        (do
+          (= runCount (+ runCount 1))
+          (= status (if wordWrap
+            (do (print "---" filename "---") (print code) "Ran with buffer")
+            "Ran code"))
+          (print "Run #" runCount "on" filename)))
+
+      (gui-same-line colGap)
+      (if (gui-button "Clear" btnW)
+        (do
+          (= code "")
+          (= status "Cleared editor")
+          (print "Cleared" filename)))
+
+      (gui-same-line colGap)
+      (if (gui-button "Reset" btnW)
+        (do
+          (= filename "main.fe")
+          (= code "(+ 1 2)\n(print \"Hello from code.fe\")")
+          (= status "Reset template")
+          (print "Reset" filename)))
+
+      (gui-label status)
+      (gui-end)
+      (if (not (gui-visible? "CodeEditor"))
+        (= showEditor nil))))
+
+  (= prevShowEditor showEditor)))
