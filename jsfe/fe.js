@@ -57,9 +57,6 @@
 
   var _nextObjId = 1;
 
-  /**
-   * Represents a tagged fe_Object (analogous to union Value car, cdr in fe.c)
-   */
   function FeObject(type, car, cdr, line, col) {
     this.id = _nextObjId++;
     this.type = type;
@@ -69,9 +66,6 @@
     this.col = col !== undefined ? col : null;
   }
 
-  /**
-   * Custom Error class carrying source position and the fe evaluation call stack trace
-   */
   function FeRuntimeError(message, trace, line, col) {
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, FeRuntimeError);
@@ -84,9 +78,6 @@
   }
   inherits(FeRuntimeError, Error);
 
-  /**
-   * Reader state wrapper for string input streams with line:column tracking
-   */
   function StringStream(source) {
     this.source = source;
     this.pos = 0;
@@ -106,9 +97,6 @@
     return ch;
   };
 
-  /**
-   * Core fe Virtual Machine & Context (`fe_Context`)
-   */
   function FeContext(options) {
     var opts = options || {};
     this.onPrint = opts.onPrint || function (text) {
@@ -117,25 +105,18 @@
       }
     };
 
-    // Singleton nil object (FE_TNIL)
     this.nil = new FeObject(FE_TYPE.NIL, null, null);
-    // Internal sentinel for ')' in reader
     this._rparen = new FeObject(FE_TYPE.NIL, null, null);
 
-    // Symbol table list: list of interned symbol objects
     this.symlist = this.nil;
-    // Evaluation call stack for traceback reporting
     this.calllist = this.nil;
-    // Single-char lookahead buffer and its source coordinates for reader
     this.nextchr = "";
     this.nextline = 1;
     this.nextcol = 0;
 
-    // Intern `t` symbol and bind it to itself
     this.t = this.symbol("t");
     this.set(this.t, this.t);
 
-    // Register all 26 built-in primitives
     var i;
     for (i = 0; i < PRIM_NAMES.length; i++) {
       var primObj = new FeObject(FE_TYPE.PRIM, null, i);
@@ -172,10 +153,6 @@
     this.nextline = line;
     this.nextcol = col;
   };
-
-  /* ------------------------------------------------------------------------
-   * Error Handling & Type Checking
-   * ------------------------------------------------------------------------ */
 
   FeContext.prototype.error = function (msg, line, col) {
     var trace = [];
@@ -222,10 +199,6 @@
     return obj === this.nil || obj.type === FE_TYPE.NIL;
   };
 
-  /* ------------------------------------------------------------------------
-   * Constructors & List Operations
-   * ------------------------------------------------------------------------ */
-
   FeContext.prototype.cons = function (car, cdr, line, col) {
     return new FeObject(FE_TYPE.PAIR, car, cdr, line, col);
   };
@@ -245,10 +218,6 @@
     return new FeObject(FE_TYPE.STRING, null, String(str), line, col);
   };
 
-  /**
-   * Interned symbol lookup/creation.
-   * In fe.c, a symbol's cdr is a pair `(nameString . globalValue)`
-   */
   FeContext.prototype.symbol = function (name, line, col) {
     var cur = this.symlist;
     while (!this.isNil(cur)) {
@@ -330,10 +299,6 @@
     return this.checkType(obj, FE_TYPE.PTR).cdr;
   };
 
-  /* ------------------------------------------------------------------------
-   * Environment Lookup & Global Binding
-   * ------------------------------------------------------------------------ */
-
   FeContext.prototype._getBound = function (sym, env) {
     var cur = env;
     while (!this.isNil(cur)) {
@@ -343,7 +308,6 @@
       }
       cur = cur.cdr;
     }
-    // Fallback to global binding cell stored in sym.cdr
     return sym.cdr;
   };
 
@@ -359,10 +323,6 @@
     var val = this._getBound(sym, this.nil).cdr;
     return val && val.type !== undefined ? val : this.nil;
   };
-
-  /* ------------------------------------------------------------------------
-   * Reader & Printer (fe_read / fe_write)
-   * ------------------------------------------------------------------------ */
 
   FeContext.prototype.toString = function (obj, qt) {
     if (qt === undefined) qt = true;
@@ -546,10 +506,6 @@
     }
   };
 
-  /* ------------------------------------------------------------------------
-   * Evaluator (fe_eval)
-   * ------------------------------------------------------------------------ */
-
   FeContext.prototype.eval = function (obj) {
     return this._eval(obj, this.nil, null);
   };
@@ -631,7 +587,6 @@
       return obj;
     }
 
-    // Push onto call stack for tracebacks
     this.calllist = this.cons(obj, this.calllist);
 
     var fn = this._eval(obj.car, env, null);
@@ -680,8 +635,9 @@
 
           case PRIM.FN:
           case PRIM.MAC: {
-            var closureBody = this.cons(env, argState.list);
-            this.nextArg(argState); // validate param list presence
+            var paramsObj = this.nextArg(argState);
+            var bodyObj = argState.list;
+            var closureBody = this.cons(env, this.cons(paramsObj, bodyObj));
             res = new FeObject(
               fn.cdr === PRIM.FN ? FE_TYPE.FUNC : FE_TYPE.MACRO,
               null,
@@ -881,10 +837,6 @@
     return false;
   };
 
-  /* ------------------------------------------------------------------------
-   * JavaScript Interop & Extension Bridge
-   * ------------------------------------------------------------------------ */
-
   FeContext.prototype.toArray = function (pair) {
     var arr = [];
     var cur = pair;
@@ -917,7 +869,6 @@
   };
 
   FeContext.prototype.fromJS = function (val) {
-    var self = this;
     if (val instanceof FeObject) return val;
     if (val === null || val === undefined || val === false) return this.nil;
     if (val === true) return this.t;
@@ -956,7 +907,6 @@
     });
   };
 
-  // Export for CommonJS, AMD, or browser globals
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       FE_TYPE: FE_TYPE,

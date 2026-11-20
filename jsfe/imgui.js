@@ -2,7 +2,8 @@
  * imgui.js — Minimalist Immediate Mode GUI for jsfe (`fe.js`)
  * Supports:
  *   gui-clear, gui-begin, gui-end, gui-anchor, gui-label, gui-button,
- *   gui-slider, gui-checkbox, gui-text, gui-textarea
+ *   gui-same-line, gui-slider, gui-checkbox, gui-text, gui-textarea,
+ *   gui-launcher, gui-reopen
  */
 (function (global) {
   "use strict";
@@ -80,6 +81,7 @@
     this._fieldScroll = {}; // id -> { x, y }
     this._fieldRects = {}; // id -> { boxX, boxY, boxW, boxH, type, lineH }
     this._dragFieldScroll = null; // { id, axis: "x"|"y", offset }
+    this._svgIconCache = {}; // svgMarkup -> { img: HTMLImageElement, loaded: boolean }
 
     // Window management & resizing state (keyed by window title)
     this._windows = {}; // winId -> { x, y, w, h, minimized, maximized, closed, prevRect, initialized }
@@ -670,14 +672,25 @@
     );
   };
 
-  /**
-   * Sets the widget anchor for subsequent widgets in the current window.
-   * Supported `pos`:
-   *   "top-left" | "top-center" | "top-right" |
-   *   "left"     | "center"     | "right"     |
-   *   "bottom-left" | "bottom-center" | "bottom-right" |
-   *   "none" | null
-   */
+  MiniImGui.prototype._getSvgIcon = function (svgMarkup) {
+    var key = String(svgMarkup || "");
+    if (!key) return null;
+    if (Object.prototype.hasOwnProperty.call(this._svgIconCache, key)) {
+      return this._svgIconCache[key];
+    }
+    var raw = key.trim();
+    if (raw.indexOf("<svg") === 0 && raw.indexOf("xmlns=") === -1) {
+      raw = raw.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    var entry = { img: new Image(), loaded: false };
+    entry.img.onload = function () {
+      entry.loaded = true;
+    };
+    entry.img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(raw);
+    this._svgIconCache[key] = entry;
+    return entry;
+  };
+
   MiniImGui.prototype.setAnchor = function (pos, offsetX, offsetY) {
     if (!pos || String(pos).toLowerCase() === "none") {
       this._anchor = null;
@@ -690,10 +703,6 @@
     };
   };
 
-  /**
-   * Computes (x, y) for a widget of size (w, h) using active anchor if set,
-   * otherwise returns current (cursorX, cursorY).
-   */
   MiniImGui.prototype._resolveWidgetPos = function (w, h) {
     if (!this._anchor) {
       return { x: this.cursorX, y: this.cursorY };
@@ -746,11 +755,40 @@
   };
 
   MiniImGui.prototype.reopenWindow = function (title) {
-    var winId = "win:" + String(title || "Window");
-    if (Object.prototype.hasOwnProperty.call(this._windows, winId)) {
-      this._windows[winId].closed = false;
-      this._windows[winId].minimized = false;
+    var winTitle = String(title || "Window");
+    var winId = "win:" + winTitle;
+    var wState = this._getWindowState(winId, 16, 16, Math.max(260, this.width - 40), Math.max(220, this.height - 40));
+    wState.closed = false;
+    wState.minimized = false;
+  };
+
+  MiniImGui.prototype.showWindow = function (title) {
+    this.reopenWindow(title);
+  };
+
+  MiniImGui.prototype.hideWindow = function (title) {
+    var winTitle = String(title || "Window");
+    var winId = "win:" + winTitle;
+    var wState = this._getWindowState(winId, 16, 16, Math.max(260, this.width - 40), Math.max(220, this.height - 40));
+    wState.minimized = true;
+  };
+
+  MiniImGui.prototype.isWindowVisible = function (title) {
+    var winTitle = String(title || "Window");
+    var winId = "win:" + winTitle;
+    if (!Object.prototype.hasOwnProperty.call(this._windows, winId)) {
+      return false;
     }
+    var st = this._windows[winId];
+    return !st.closed && !st.minimized;
+  };
+
+  MiniImGui.prototype.isWindowClosed = function (title) {
+    var winId = "win:" + String(title || "Window");
+    return Boolean(
+      Object.prototype.hasOwnProperty.call(this._windows, winId) &&
+      this._windows[winId].closed
+    );
   };
 
   MiniImGui.prototype.beginWindow = function (title, x, y, w, h) {
@@ -776,7 +814,6 @@
     var minWinW = 160;
     var minWinH = 80;
 
-    // Handle active window resize drag
     if (this._resizeWindow && this._resizeWindow.winId === winId && this.mouseDown && !wState.maximized) {
       var rdx = this.mouseX - this._resizeWindow.startMouseX;
       var rdy = this.mouseY - this._resizeWindow.startMouseY;
@@ -792,7 +829,6 @@
       wState.minimized = false;
     }
 
-    // Handle active titlebar drag
     if (this._dragWindow && this._dragWindow.winId === winId && this.mouseDown && !wState.maximized) {
       var dx = this.mouseX - this._dragWindow.startMouseX;
       var dy = this.mouseY - this._dragWindow.startMouseY;
@@ -800,12 +836,17 @@
       wState.y = Math.max(0, Math.min(Math.max(0, this.height - this.titleBarH), this._dragWindow.startWinY + dy));
     }
 
+    if (wState.minimized) {
+      this._currentWinSkipped = true;
+      return;
+    }
+
     var drawX = wState.x;
     var drawY = wState.y;
     var drawW = wState.maximized ? Math.max(160, this.width - 16) : wState.w;
     var drawH = wState.maximized
       ? Math.max(80, this.height - 16)
-      : (wState.minimized ? this.titleBarH : wState.h);
+      : wState.h;
 
     if (wState.maximized) {
       drawX = 8;
@@ -819,7 +860,6 @@
     this.cursorX = this.winX + 10;
     this.cursorY = this.winY + this.titleBarH + 10;
 
-    // Resize hit regions (when not minimized or maximized)
     var canResize = !wState.minimized && !wState.maximized;
     var gripSize = 14;
     var edgePad = 6;
@@ -830,41 +870,47 @@
     var ctx = this.ctx;
     ctx.save();
 
-    // Window frame
     ctx.fillStyle = "#1b202c";
     ctx.strokeStyle = "#343c52";
     ctx.lineWidth = 1;
     ctx.fillRect(this.winX, this.winY, this.winW, this.winH);
     ctx.strokeRect(this.winX, this.winY, this.winW, this.winH);
 
-    // Title bar
     var isDraggingThisWin = Boolean(this._dragWindow && this._dragWindow.winId === winId);
     ctx.fillStyle = isDraggingThisWin ? "#323c52" : "#262d3d";
     ctx.fillRect(this.winX, this.winY, this.winW, this.titleBarH);
     ctx.strokeRect(this.winX, this.winY, this.winW, this.titleBarH);
 
-    // Titlebar control buttons: Close [x], Maximize [max], Minimize [-]
     var btnSize = 16;
     var btnGap = 4;
     var btnY = this.winY + Math.floor((this.titleBarH - btnSize) / 2);
 
-    var closeBtnX = this.winX + this.winW - btnSize - 4;
-    var maxBtnX = closeBtnX - btnSize - btnGap;
+    var maxBtnX = this.winX + this.winW - btnSize - 4;
     var minBtnX = maxBtnX - btnSize - btnGap;
 
     var minHover = this._hit(minBtnX, btnY, btnSize, btnSize);
     var maxHover = this._hit(maxBtnX, btnY, btnSize, btnSize);
-    var closeHover = this._hit(closeBtnX, btnY, btnSize, btnSize);
-    var anyBtnHover = minHover || maxHover || closeHover;
+    var anyBtnHover = minHover || maxHover;
 
     var titleBarHover = !anyBtnHover && !rightEdgeHover && this._hit(this.winX, this.winY, Math.max(0, minBtnX - this.winX), this.titleBarH);
 
     if (this.mouseClicked) {
       if (minHover) {
         this.mouseClicked = false;
-        wState.minimized = !wState.minimized;
+        this.activeId = null;
+        this.focusedId = null;
+        this.focusType = null;
+        this._dragWindow = null;
+        this._resizeWindow = null;
+        wState.minimized = true;
+        this._currentWinSkipped = true;
+        ctx.restore();
+        return;
       } else if (maxHover) {
         this.mouseClicked = false;
+        this.activeId = null;
+        this._dragWindow = null;
+        this._resizeWindow = null;
         if (!wState.maximized) {
           wState.prevRect = { x: wState.x, y: wState.y, w: wState.w, h: wState.h };
           wState.minimized = false;
@@ -878,12 +924,7 @@
             wState.h = wState.prevRect.h;
           }
         }
-      } else if (closeHover) {
-        this.mouseClicked = false;
-        wState.closed = true;
-        this._currentWinSkipped = true;
-        ctx.restore();
-        return;
+
       } else if (cornerHover || rightEdgeHover || bottomEdgeHover) {
         this.mouseClicked = false;
         this.focusedId = null;
@@ -909,7 +950,6 @@
       }
     }
 
-    // Draw window title text (clipped before buttons)
     ctx.save();
     ctx.beginPath();
     ctx.rect(this.winX + 4, this.winY + 1, Math.max(10, minBtnX - this.winX - 8), this.titleBarH - 2);
@@ -919,7 +959,6 @@
     ctx.fillText(winTitle, this.winX + 10, this.winY + 16);
     ctx.restore();
 
-    // Draw Minimize button (-)
     ctx.fillStyle = minHover ? "#3b4661" : "#2e374d";
     ctx.fillRect(minBtnX, btnY, btnSize, btnSize);
     ctx.strokeStyle = "#526082";
@@ -931,7 +970,6 @@
     ctx.lineTo(minBtnX + btnSize - 4, btnY + btnSize - 4.5);
     ctx.stroke();
 
-    // Draw Maximize / Restore button ([])
     ctx.fillStyle = maxHover ? "#3b4661" : "#2e374d";
     ctx.fillRect(maxBtnX, btnY, btnSize, btnSize);
     ctx.strokeStyle = "#526082";
@@ -945,27 +983,6 @@
       ctx.strokeRect(maxBtnX + 4, btnY + 4, btnSize - 8, btnSize - 8);
     }
 
-    // Draw Close button (x)
-    ctx.fillStyle = closeHover ? "#9e343e" : "#3a2a33";
-    ctx.fillRect(closeBtnX, btnY, btnSize, btnSize);
-    ctx.strokeStyle = closeHover ? "#e06c75" : "#664752";
-    ctx.strokeRect(closeBtnX, btnY, btnSize, btnSize);
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(closeBtnX + 4.5, btnY + 4.5);
-    ctx.lineTo(closeBtnX + btnSize - 4.5, btnY + btnSize - 4.5);
-    ctx.moveTo(closeBtnX + btnSize - 4.5, btnY + 4.5);
-    ctx.lineTo(closeBtnX + 4.5, btnY + btnSize - 4.5);
-    ctx.stroke();
-
-    if (wState.minimized) {
-      this._currentWinSkipped = true;
-      ctx.restore();
-      return;
-    }
-
-    // Clip to window client area
     ctx.beginPath();
     ctx.rect(
       this.winX + 1,
@@ -988,7 +1005,6 @@
       return;
     }
 
-    // Draw bottom-right resize grip over client corner when resizable
     var wState = this._currentWinId ? this._windows[this._currentWinId] : null;
     if (wState && !wState.minimized && !wState.maximized) {
       var ctx = this.ctx;
@@ -1090,6 +1106,97 @@
     this.cursorX = x;
     this.cursorY = y + h + this.gap;
     return clicked;
+  };
+
+  MiniImGui.prototype.launcher = function (labelText, svgMarkup, isOpen, customW, x, y) {
+    var hasExplicitPos = typeof x === "number" && typeof y === "number";
+    if (!hasExplicitPos && this._currentWinSkipped) {
+      return Boolean(isOpen);
+    }
+
+    var labelStr = labelText !== undefined && labelText !== null ? String(labelText) : "Launcher";
+    var id = "launcher:" + labelStr;
+    var ctx = this.ctx;
+    ctx.font = "12px monospace";
+
+    var iconSize = 16;
+    var textW = labelStr ? ctx.measureText(labelStr).width : 0;
+    var computedW = 10 + iconSize + (labelStr ? 8 + textW : 0) + 10;
+    var w = typeof customW === "number" && customW > 0
+      ? customW
+      : (hasExplicitPos ? computedW : Math.max(computedW, this.winW - 20));
+    var h = this.rowHeight + 2;
+
+    var pos = hasExplicitPos ? { x: x, y: y } : this._resolveWidgetPos(w, h);
+    var wx = pos.x;
+    var wy = pos.y;
+
+    var hovered = this._hit(wx, wy, w, h);
+    var clicked = false;
+    var wasActive = this.activeId === id;
+
+    if (hovered) {
+      this.hotId = id;
+      if (this.activeId === null && this.mouseClicked) {
+        this.activeId = id;
+        wasActive = true;
+        this.mouseClicked = false;
+        this.focusedId = null;
+        this.focusType = null;
+      }
+    }
+
+    if (wasActive && !this.mouseDown) {
+      if (hovered) {
+        clicked = true;
+      }
+      if (this.activeId === id) {
+        this.activeId = null;
+      }
+    }
+
+    var activeState = Boolean(isOpen);
+    var nextState = clicked ? !activeState : activeState;
+
+    ctx.save();
+    if (this.activeId === id) {
+      ctx.fillStyle = "#3b6fd8";
+    } else if (activeState) {
+      ctx.fillStyle = hovered ? "#354a75" : "#283858";
+    } else if (this.hotId === id) {
+      ctx.fillStyle = "#343e54";
+    } else {
+      ctx.fillStyle = "#252b3a";
+    }
+
+    ctx.fillRect(wx, wy, w, h);
+    ctx.strokeStyle = activeState ? "#6ea8fe" : "#45506b";
+    ctx.strokeRect(wx, wy, w, h);
+
+    var iconX = wx + 9;
+    var iconY = wy + Math.floor((h - iconSize) / 2);
+    var iconEntry = this._getSvgIcon(svgMarkup);
+    if (iconEntry && iconEntry.loaded) {
+      ctx.drawImage(iconEntry.img, iconX, iconY, iconSize, iconSize);
+    } else {
+      ctx.fillStyle = "#6ea8fe";
+      ctx.fillRect(iconX + 2, iconY + 2, iconSize - 4, iconSize - 4);
+    }
+
+    if (labelStr) {
+      ctx.fillStyle = "#eef2fa";
+      ctx.font = "12px monospace";
+      ctx.fillText(labelStr, iconX + iconSize + 8, wy + Math.floor(h / 2) + 4);
+    }
+    ctx.restore();
+
+    this._lastWidget = { x: wx, y: wy, w: w, h: h };
+    if (!hasExplicitPos) {
+      this.cursorX = wx;
+      this.cursorY = wy + h + this.gap;
+    }
+
+    return clicked ? nextState : activeState;
   };
 
   MiniImGui.prototype.sameLine = function (offsetX) {
@@ -1300,7 +1407,6 @@
     var caretIdx = this._getCursorPos(id, text);
     var caretX = ctx.measureText(text.slice(0, caretIdx)).width;
 
-    // Auto-scroll horizontally when caret moved/typed
     if (this._caretMovedFlag[id]) {
       this._caretMovedFlag[id] = false;
       if (caretX - sc.x > fieldW - 10) {
@@ -1737,9 +1843,6 @@
     return text;
   };
 
-  /**
-   * Registers immediate-mode GUI primitives onto an FeContext instance.
-   */
   function attachImGuiToFe(feCtx, imguiInstance, mountTarget) {
     var gui = imguiInstance || new MiniImGui();
     gui.mount(mountTarget || document.getElementById("gui-pane") || document.body);
@@ -1759,6 +1862,25 @@
       return null;
     });
 
+    feCtx.define("gui-reopen", function (_ctx, title) {
+      gui.reopenWindow(title);
+      return null;
+    });
+
+    feCtx.define("gui-show", function (_ctx, title) {
+      gui.showWindow(title);
+      return null;
+    });
+
+    feCtx.define("gui-hide", function (_ctx, title) {
+      gui.hideWindow(title);
+      return null;
+    });
+
+    feCtx.define("gui-visible?", function (_ctx, title) {
+      return gui.isWindowVisible(title);
+    });
+
     feCtx.define("gui-anchor", function (_ctx, pos, offsetX, offsetY) {
       gui.setAnchor(pos, offsetX, offsetY);
       return null;
@@ -1771,6 +1893,10 @@
 
     feCtx.define("gui-button", function (_ctx, text, customW) {
       return gui.button(text, customW);
+    });
+
+    feCtx.define("gui-launcher", function (_ctx, text, svgMarkup, isOpen, customW, x, y) {
+      return gui.launcher(text, svgMarkup, isOpen, customW, x, y);
     });
 
     feCtx.define("gui-same-line", function (_ctx, offsetX) {
