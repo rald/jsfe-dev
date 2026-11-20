@@ -39,17 +39,21 @@
       (= speed (gui-slider "Speed" speed 0 100))
       (= title (gui-text "Title" title))
       (= notes (gui-textarea "Notes" notes 120))
-      (if (gui-button "Increment" 197)
+      (= rowGap 6)
+      (= btnW (/ (- (gui-win-w) rowGap) 2))
+      (if (gui-button "Increment" btnW)
         (= count (+ count 1)))
-      (gui-same-line 6)
-      (if (gui-button "Reset" 197)
+      (gui-same-line rowGap)
+      (if (gui-button "Reset" btnW)
         (= count 0))
       (gui-label (if active
         (do (print "count:" count "speed:" speed) "Logging...")
         "Idle"))
       (gui-end)
       (if (not (gui-visible? "ImGuiDemo"))
-        (= showDemo nil))))))
+        (= showDemo nil))))
+
+  (= prevShowDemo showDemo)))
 
       </textarea>
       <textarea id="txtoutput" rows="10" cols="40"></textarea>

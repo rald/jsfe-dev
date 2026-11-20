@@ -1,7 +1,7 @@
 /**
  * imgui.js — Minimalist Immediate Mode GUI for jsfe (`fe.js`)
  * Supports:
- *   gui-clear, gui-begin, gui-end, gui-anchor, gui-label, gui-button,
+ *   gui-clear, gui-begin, gui-end, gui-label, gui-button,
  *   gui-same-line, gui-slider, gui-checkbox, gui-text, gui-textarea,
  *   gui-launcher, gui-reopen
  */
@@ -84,14 +84,11 @@
     this._svgIconCache = {}; // svgMarkup -> { img: HTMLImageElement, loaded: boolean }
 
     // Window management & resizing state (keyed by window title)
-    this._windows = {}; // winId -> { x, y, w, h, minimized, maximized, closed, prevRect, initialized }
+    this._windows = {}; // winId -> { x, y, w, h, origX, origY, origW, origH, moved, resized, minimized, maximized, closed, prevRect, hasExplicitRect }
     this._dragWindow = null; // { winId, startMouseX, startMouseY, startWinX, startWinY }
     this._resizeWindow = null; // { winId, edge: "corner"|"right"|"bottom", startMouseX, startMouseY, startW, startH }
     this._currentWinId = null;
     this._currentWinSkipped = false;
-
-    // Widget anchor state for current window
-    this._anchor = null; // { pos: string, offsetX: number, offsetY: number } | null
 
     // Frame interaction state
     this.hotId = null;
@@ -691,60 +688,20 @@
     return entry;
   };
 
-  MiniImGui.prototype.setAnchor = function (pos, offsetX, offsetY) {
-    if (!pos || String(pos).toLowerCase() === "none") {
-      this._anchor = null;
-      return;
-    }
-    this._anchor = {
-      pos: String(pos).toLowerCase(),
-      offsetX: typeof offsetX === "number" ? offsetX : 0,
-      offsetY: typeof offsetY === "number" ? offsetY : 0
-    };
-  };
-
-  MiniImGui.prototype._resolveWidgetPos = function (w, h) {
-    if (!this._anchor) {
-      return { x: this.cursorX, y: this.cursorY };
-    }
-    var pad = 10;
-    var clientX = this.winX + pad;
-    var clientY = this.winY + this.titleBarH + pad;
-    var clientW = Math.max(20, this.winW - pad * 2);
-    var clientH = Math.max(20, this.winH - this.titleBarH - pad * 2);
-
-    var pos = this._anchor.pos;
-    var x = this.cursorX;
-    var y = this.cursorY;
-
-    if (pos.indexOf("left") !== -1) {
-      x = clientX;
-    } else if (pos.indexOf("right") !== -1) {
-      x = clientX + Math.max(0, clientW - w);
-    } else if (pos === "top-center" || pos === "center" || pos === "bottom-center") {
-      x = clientX + Math.max(0, Math.floor((clientW - w) / 2));
-    }
-
-    if (pos.indexOf("top") !== -1) {
-      y = clientY;
-    } else if (pos.indexOf("bottom") !== -1) {
-      y = clientY + Math.max(0, clientH - h);
-    } else if (pos === "left" || pos === "center" || pos === "right") {
-      y = clientY + Math.max(0, Math.floor((clientH - h) / 2));
-    }
-
-    x += this._anchor.offsetX;
-    y += this._anchor.offsetY;
-    return { x: x, y: y };
-  };
-
-  MiniImGui.prototype._getWindowState = function (winId, defaultX, defaultY, defaultW, defaultH) {
+  MiniImGui.prototype._getWindowState = function (winId, defaultX, defaultY, defaultW, defaultH, hasExplicitRect) {
     if (!Object.prototype.hasOwnProperty.call(this._windows, winId)) {
       this._windows[winId] = {
         x: defaultX,
         y: defaultY,
         w: defaultW,
         h: defaultH,
+        origX: defaultX,
+        origY: defaultY,
+        origW: defaultW,
+        origH: defaultH,
+        hasExplicitRect: Boolean(hasExplicitRect),
+        moved: false,
+        resized: false,
         minimized: false,
         maximized: false,
         closed: false,
@@ -757,7 +714,16 @@
   MiniImGui.prototype.reopenWindow = function (title) {
     var winTitle = String(title || "Window");
     var winId = "win:" + winTitle;
-    var wState = this._getWindowState(winId, 16, 16, Math.max(260, this.width - 40), Math.max(220, this.height - 40));
+    this._getWindowState(
+      winId,
+      16,
+      16,
+      Math.max(260, this.width - 40),
+      Math.max(220, this.height - 40),
+      false
+    );
+    var wState = this._windows[winId];
+    // Restore current state (position, size, maximized, prevRect) without resetting
     wState.closed = false;
     wState.minimized = false;
   };
@@ -769,7 +735,14 @@
   MiniImGui.prototype.hideWindow = function (title) {
     var winTitle = String(title || "Window");
     var winId = "win:" + winTitle;
-    var wState = this._getWindowState(winId, 16, 16, Math.max(260, this.width - 40), Math.max(220, this.height - 40));
+    var wState = this._getWindowState(
+      winId,
+      16,
+      16,
+      Math.max(260, this.width - 40),
+      Math.max(220, this.height - 40),
+      false
+    );
     wState.minimized = true;
   };
 
@@ -793,7 +766,6 @@
 
   MiniImGui.prototype.beginWindow = function (title, x, y, w, h) {
     this.frameCount++;
-    this._anchor = null;
     var winTitle = String(title || "Window");
     var winId = "win:" + winTitle;
     this._currentWinId = winId;
@@ -803,8 +775,46 @@
     var initY = typeof y === "number" ? y : 16;
     var initW = typeof w === "number" ? w : Math.max(260, this.width - initX - 24);
     var initH = typeof h === "number" ? h : Math.max(220, this.height - initY - 24);
+    var hasExplicit = typeof x === "number" || typeof y === "number" || typeof w === "number" || typeof h === "number";
 
-    var wState = this._getWindowState(winId, initX, initY, initW, initH);
+    var wState = this._getWindowState(winId, initX, initY, initW, initH, hasExplicit);
+
+    if (!wState.hasExplicitRect && hasExplicit) {
+      wState.hasExplicitRect = true;
+      if (typeof x === "number") {
+        wState.origX = initX;
+        if (!wState.moved) wState.x = initX;
+      }
+      if (typeof y === "number") {
+        wState.origY = initY;
+        if (!wState.moved) wState.y = initY;
+      }
+      if (typeof w === "number") {
+        wState.origW = initW;
+        if (!wState.resized) wState.w = initW;
+      }
+      if (typeof h === "number") {
+        wState.origH = initH;
+        if (!wState.resized) wState.h = initH;
+      }
+    } else {
+      if (typeof x === "number") {
+        wState.origX = initX;
+        if (!wState.moved) wState.x = initX;
+      }
+      if (typeof y === "number") {
+        wState.origY = initY;
+        if (!wState.moved) wState.y = initY;
+      }
+      if (typeof w === "number" && wState.origW !== initW) {
+        wState.origW = initW;
+        if (!wState.resized) wState.w = initW;
+      }
+      if (typeof h === "number" && wState.origH !== initH) {
+        wState.origH = initH;
+        if (!wState.resized) wState.h = initH;
+      }
+    }
 
     if (wState.closed) {
       this._currentWinSkipped = true;
@@ -826,6 +836,7 @@
         var maxH = Math.max(minWinH, this.height - wState.y - 4);
         wState.h = Math.max(minWinH, Math.min(maxH, this._resizeWindow.startH + rdy));
       }
+      wState.resized = true;
       wState.minimized = false;
     }
 
@@ -834,11 +845,19 @@
       var dy = this.mouseY - this._dragWindow.startMouseY;
       wState.x = Math.max(0, Math.min(Math.max(0, this.width - 60), this._dragWindow.startWinX + dx));
       wState.y = Math.max(0, Math.min(Math.max(0, this.height - this.titleBarH), this._dragWindow.startWinY + dy));
+      wState.moved = true;
     }
 
     if (wState.minimized) {
       this._currentWinSkipped = true;
       return;
+    }
+
+    if (!wState.maximized) {
+      var clampMaxX = Math.max(0, this.width - Math.min(wState.w, 80));
+      var clampMaxY = Math.max(0, this.height - this.titleBarH);
+      wState.x = Math.max(0, Math.min(clampMaxX, wState.x));
+      wState.y = Math.max(0, Math.min(clampMaxY, wState.y));
     }
 
     var drawX = wState.x;
@@ -924,11 +943,11 @@
             wState.h = wState.prevRect.h;
           }
         }
-
       } else if (cornerHover || rightEdgeHover || bottomEdgeHover) {
         this.mouseClicked = false;
         this.focusedId = null;
         this.focusType = null;
+        wState.resized = true;
         this._resizeWindow = {
           winId: winId,
           edge: cornerHover ? "corner" : (rightEdgeHover ? "right" : "bottom"),
@@ -940,6 +959,7 @@
       } else if (titleBarHover && !wState.maximized) {
         this.focusedId = null;
         this.focusType = null;
+        wState.moved = true;
         this._dragWindow = {
           winId: winId,
           startMouseX: this.mouseX,
@@ -997,7 +1017,6 @@
     if (this._currentWinSkipped) {
       this._currentWinSkipped = false;
       this._currentWinId = null;
-      this._anchor = null;
       this.mouseClicked = false;
       if (!this.mouseDown && this.activeId !== null) {
         this.activeId = null;
@@ -1027,7 +1046,6 @@
     }
 
     this._currentWinId = null;
-    this._anchor = null;
     this.ctx.restore();
     this.mouseClicked = false;
     if (!this.mouseDown && this.activeId !== null) {
@@ -1040,11 +1058,8 @@
     var ctx = this.ctx;
     ctx.font = "12px monospace";
     var str = String(text);
-    var w = Math.max(40, Math.min(Math.max(80, this.winW - 20), ctx.measureText(str).width + 8));
-    var h = this.rowHeight;
-    var pos = this._resolveWidgetPos(w, h);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
 
     ctx.fillStyle = "#c8d0e0";
     ctx.fillText(str, x, y + 16);
@@ -1057,9 +1072,8 @@
     var id = "btn:" + labelText;
     var w = typeof customW === "number" ? customW : Math.max(80, this.winW - 20);
     var h = this.rowHeight;
-    var pos = this._resolveWidgetPos(w, h);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
 
     var hovered = this._hit(x, y, w, h);
     var clicked = false;
@@ -1127,9 +1141,8 @@
       : (hasExplicitPos ? computedW : Math.max(computedW, this.winW - 20));
     var h = this.rowHeight + 2;
 
-    var pos = hasExplicitPos ? { x: x, y: y } : this._resolveWidgetPos(w, h);
-    var wx = pos.x;
-    var wy = pos.y;
+    var wx = hasExplicitPos ? x : this.cursorX;
+    var wy = hasExplicitPos ? y : this.cursorY;
 
     var hovered = this._hit(wx, wy, w, h);
     var clicked = false;
@@ -1215,9 +1228,8 @@
 
     var w = Math.max(80, this.winW - 20);
     var h = this.rowHeight;
-    var pos = this._resolveWidgetPos(w, h);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
 
     var hovered = this._hit(x, y, w, h);
 
@@ -1267,9 +1279,8 @@
     var isChecked = Boolean(checked);
     var w = Math.max(80, this.winW - 20);
     var h = this.rowHeight;
-    var pos = this._resolveWidgetPos(w, h);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
 
     var hovered = this._hit(x, y, w, h);
 
@@ -1314,9 +1325,8 @@
 
     var w = Math.max(100, this.winW - 20);
     var h = this.rowHeight;
-    var pos = this._resolveWidgetPos(w, h);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
     var prefix = labelText ? (labelText + ": ") : "";
 
     var isFocused = this.focusedId === id && this.focusType === "text";
@@ -1483,9 +1493,8 @@
 
     var w = Math.max(120, this.winW - 20);
     var totalH = (typeof areaHeight === "number" ? areaHeight : 96) + headerH;
-    var pos = this._resolveWidgetPos(w, totalH);
-    var x = pos.x;
-    var y = pos.y;
+    var x = this.cursorX;
+    var y = this.cursorY;
     var boxY = y + headerH;
     var boxH = Math.max(40, totalH - headerH);
 
@@ -1881,14 +1890,13 @@
       return gui.isWindowVisible(title);
     });
 
-    feCtx.define("gui-anchor", function (_ctx, pos, offsetX, offsetY) {
-      gui.setAnchor(pos, offsetX, offsetY);
-      return null;
-    });
-
     feCtx.define("gui-label", function (_ctx, text) {
       gui.label(text);
       return null;
+    });
+
+    feCtx.define("gui-win-w", function () {
+      return Math.max(80, gui.winW - 20);
     });
 
     feCtx.define("gui-button", function (_ctx, text, customW) {
