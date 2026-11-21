@@ -1,0 +1,391 @@
+/* ============================================================================
+ * style.css — jsfe Web OS Styling (100% Sweetie-16 Palette)
+ * ============================================================================ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: #1a1c2c; /* licorice */
+  color: #f4f4f4; /* marshmallow */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Topbar / Dock bar */
+#os-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  background-color: #29366f; /* blueberry */
+  border-bottom: 2px solid #566c86; /* earlGrey */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  z-index: 9000;
+  gap: 8px;
+}
+
+.topbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.os-brand {
+  background-color: #5d275d; /* plum */
+  color: #f4f4f4; /* marshmallow */
+  border: 1px solid #ffcd75; /* butterscotch */
+  padding: 2px 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.os-philosophy {
+  color: #73eff7; /* frosting */
+  font-size: 11px;
+  background-color: #1a1c2c; /* licorice */
+  border: 1px solid #257179; /* spearmint */
+  padding: 2px 7px;
+}
+
+.os-btn {
+  background-color: #333c57; /* darkChocolate */
+  color: #f4f4f4; /* marshmallow */
+  border: 1px solid #566c86; /* earlGrey */
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.os-btn:hover {
+  background-color: #3b5dc9; /* blueRaspberry */
+  border-color: #73eff7; /* frosting */
+}
+
+.os-btn.accent-mint {
+  background-color: #257179; /* spearmint */
+  border-color: #a7f070; /* pistachio */
+  color: #f4f4f4; /* marshmallow */
+}
+
+.os-btn.accent-mint:hover {
+  background-color: #38b764; /* mint */
+  color: #1a1c2c; /* licorice */
+}
+
+.os-btn.accent-warn {
+  background-color: #5d275d; /* plum */
+  border-color: #ef7d57; /* peach */
+  color: #ffcd75; /* butterscotch */
+}
+
+.os-btn.accent-warn:hover {
+  background-color: #b13e53; /* raspberry */
+  color: #f4f4f4; /* marshmallow */
+}
+
+/* Desktop workspace */
+#os-desktop {
+  position: fixed;
+  top: 34px;
+  left: 0;
+  right: 0;
+  bottom: 28px;
+  background-color: #1a1c2c; /* licorice */
+  background-image:
+    linear-gradient(to right, #333c57 1px, transparent 1px),
+    linear-gradient(to bottom, #333c57 1px, transparent 1px);
+  background-size: 32px 32px;
+  overflow: hidden;
+}
+
+/* Background canvas layer inside desktop */
+#os-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Desktop icons */
+#os-icons {
+  position: relative;
+  z-index: 2;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 10px;
+  max-height: calc(100% - 20px);
+  width: fit-content;
+}
+
+.desktop-icon {
+  width: 84px;
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background-color: #1a1c2c; /* licorice */
+}
+
+.desktop-icon:hover {
+  background-color: #29366f; /* blueberry */
+  border-color: #41a6f6; /* cottonCandy */
+}
+
+.desktop-icon-glyph {
+  width: 30px;
+  height: 30px;
+  line-height: 28px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 4px;
+  border: 1px solid #94b0c2; /* sugarDust */
+  background-color: #333c57; /* darkChocolate */
+  color: #ffcd75; /* butterscotch */
+}
+
+.desktop-icon-label {
+  font-size: 11px;
+  color: #f4f4f4; /* marshmallow */
+  word-break: break-word;
+}
+
+/* Window layer */
+#os-windows {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.os-window {
+  position: absolute;
+  min-width: 280px;
+  min-height: 170px;
+  background-color: #1a1c2c; /* licorice */
+  border: 2px solid #566c86; /* earlGrey */
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.os-window.focused {
+  border-color: #41a6f6; /* cottonCandy */
+}
+
+.os-win-titlebar {
+  height: 28px;
+  background-color: #333c57; /* darkChocolate */
+  border-bottom: 1px solid #566c86; /* earlGrey */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  cursor: move;
+}
+
+.os-window.focused .os-win-titlebar {
+  background-color: #29366f; /* blueberry */
+  border-bottom-color: #41a6f6; /* cottonCandy */
+}
+
+.os-win-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffcd75; /* butterscotch */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.os-win-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.os-win-btn {
+  width: 20px;
+  height: 18px;
+  line-height: 14px;
+  text-align: center;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  background-color: #1a1c2c; /* licorice */
+  color: #f4f4f4; /* marshmallow */
+  border: 1px solid #94b0c2; /* sugarDust */
+  cursor: pointer;
+}
+
+.os-win-btn:hover {
+  background-color: #3b5dc9; /* blueRaspberry */
+  color: #73eff7; /* frosting */
+}
+
+.os-win-btn.close-btn:hover {
+  background-color: #b13e53; /* raspberry */
+  border-color: #ffcd75; /* butterscotch */
+  color: #f4f4f4; /* marshmallow */
+}
+
+.os-win-body {
+  flex: 1;
+  padding: 8px;
+  overflow: auto;
+  user-select: text;
+  background-color: #1a1c2c; /* licorice */
+  color: #f4f4f4; /* marshmallow */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Status bar */
+#os-statusbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background-color: #29366f; /* blueberry */
+  border-top: 2px solid #566c86; /* earlGrey */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  font-size: 11px;
+  z-index: 9000;
+}
+
+.status-item {
+  color: #94b0c2; /* sugarDust */
+}
+
+.status-val {
+  color: #a7f070; /* pistachio */
+  font-weight: 700;
+}
+
+.status-err {
+  color: #ef7d57; /* peach */
+}
+
+/* App UI widgets inside windows */
+.sexp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.sexp-input, .sexp-textarea, .sexp-select {
+  width: 100%;
+  background-color: #333c57; /* darkChocolate */
+  color: #f4f4f4; /* marshmallow */
+  border: 1px solid #566c86; /* earlGrey */
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.sexp-input:focus, .sexp-textarea:focus, .sexp-select:focus {
+  outline: none;
+  border-color: #73eff7; /* frosting */
+}
+
+.sexp-textarea {
+  flex: 1;
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.sexp-log {
+  flex: 1;
+  min-height: 110px;
+  overflow-y: auto;
+  background-color: #333c57; /* darkChocolate */
+  border: 1px solid #566c86; /* earlGrey */
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-in { color: #41a6f6; }     /* cottonCandy */
+.log-out { color: #a7f070; }    /* pistachio */
+.log-print { color: #73eff7; }  /* frosting */
+.log-err { color: #b13e53; }    /* raspberry */
+.log-meta { color: #94b0c2; }   /* sugarDust */
+.log-warn { color: #ffcd75; }   /* butterscotch */
+
+.sexp-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background-color: #333c57; /* darkChocolate */
+  border: 1px solid #566c86; /* earlGrey */
+  gap: 6px;
+}
+
+.sexp-list-item:hover {
+  border-color: #41a6f6; /* cottonCandy */
+}
+
+.sexp-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  background-color: #5d275d; /* plum */
+  color: #ffcd75; /* butterscotch */
+  border: 1px solid #ef7d57; /* peach */
+}
+
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.swatch-card {
+  padding: 6px;
+  border: 1px solid #566c86; /* earlGrey */
+  background-color: #333c57; /* darkChocolate */
+  font-size: 11px;
+}
+
+.swatch-chip {
+  height: 18px;
+  border: 1px solid #f4f4f4; /* marshmallow */
+  margin-bottom: 4px;
+}
+
+.palette-canvas-wrap {
+  border: 1px solid #566c86; /* earlGrey */
+  background-color: #1a1c2c; /* licorice */
+  display: flex;
+  justify-content: center;
+  padding: 4px;
+}

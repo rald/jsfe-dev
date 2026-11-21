@@ -1,0 +1,10 @@
+{
+  "name": "fe-lisp-js",
+  "version": "1.0.0",
+  "description": "ES6 port of rxi's fe Tiny Lisp interpreter with TDD test suite",
+  "type": "module",
+  "main": "fe.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

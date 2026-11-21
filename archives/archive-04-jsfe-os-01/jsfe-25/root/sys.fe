@@ -1,0 +1,33 @@
+; sys.fe — Core list combinators & Sweetie-16 helpers
+
+(= caar (fn (xs) (car (car xs))))
+(= cadr (fn (xs) (car (cdr xs))))
+(= cdar (fn (xs) (cdr (car xs))))
+(= cddr (fn (xs) (cdr (cdr xs))))
+
+(= map (fn (f xs)
+  (if (not xs)
+    nil
+    (cons (f (car xs)) (map f (cdr xs))))))
+
+(= filter (fn (pred xs)
+  (if (not xs)
+    nil
+    (if (pred (car xs))
+      (cons (car xs) (filter pred (cdr xs)))
+      (filter pred (cdr xs))))))
+
+(= foldl (fn (f acc xs)
+  (if (not xs)
+    acc
+    (foldl f (f acc (car xs)) (cdr xs)))))
+
+(= append (fn (a b)
+  (if (not a)
+    b
+    (cons (car a) (append (cdr a) b)))))
+
+(= length (fn (xs)
+  (foldl (fn (n _) (+ n 1)) 0 xs)))
+
+(print "[sys] core list combinators loaded")

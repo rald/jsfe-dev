@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<link rel="stylesheet" type="text/css" href="style.css">
+    <title>jsfe</title>
+</head>
+<body>
+	<canvas id="canvas" width="800" height="600"></canvas>
+	<script type="module">
+
+import { FeContext } from "./fe.js";
+
+const ctx = new FeContext();
+const res = await ctx.evalString("(load \"auto.fe\")");
+console.log(ctx.toJS(res));
+
+	</script>
+</body>
+</html>
