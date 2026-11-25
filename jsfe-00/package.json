@@ -1,14 +1,34 @@
 {
-  "name": "fe-js-interpreter",
+  "name": "jsfe",
   "version": "1.0.0",
   "description": "Zero-dependency ES6 implementation of rxi/fe for Web and CLI",
   "type": "module",
+  "main": "./fe.js",
+  "exports": {
+    ".": "./fe.js",
+    "./repl": "./repl.js"
+  },
   "bin": {
-    "fe": "./cli.js"
+    "jsfe": "./repl.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "scripts": {
-    "repl": "node cli.js",
-    "example": "node cli.js example.fe",
+    "start": "node repl.js",
+    "repl": "node repl.js",
+    "showcase": "node repl.js showcase.fe",
+    "test": "node --test test.js",
     "serve": "npx serve ."
-  }
+  },
+  "keywords": [
+    "lisp",
+    "interpreter",
+    "fe",
+    "rxi-fe",
+    "es6",
+    "esm",
+    "repl"
+  ],
+  "license": "MIT"
 }

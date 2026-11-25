@@ -21,7 +21,7 @@ export class Sym {
 
 export class Closure {
   constructor(params, body, env, isMacro = false) {
-    this.params = params; // Array of parameter names (or variadic rest param)
+    this.params = params; // Cons list of parameter names (or variadic rest param)
     this.body = body;     // Cons list of expressions
     this.env = env;       // Lexical environment (Cons list of (sym . val) pairs)
     this.isMacro = isMacro;
@@ -43,17 +43,30 @@ export class FeError extends Error {
 }
 
 export function isList(x) {
-  let cur = x;
-  while (cur instanceof Cons) cur = cur.cdr;
-  return cur === NIL;
-}
-
-export function listToArray(x) {
-  const out = [];
+  const seen = new Set();
   let cur = x;
   while (cur instanceof Cons) {
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    cur = cur.cdr;
+  }
+  return cur === NIL || cur === false;
+}
+
+export function listToArray(x, { requireProper = false } = {}) {
+  const out = [];
+  const seen = new Set();
+  let cur = x;
+  while (cur instanceof Cons) {
+    if (seen.has(cur)) {
+      throw new FeError("Cannot convert cyclic list to array");
+    }
+    seen.add(cur);
     out.push(cur.car);
     cur = cur.cdr;
+  }
+  if (requireProper && cur !== NIL && cur !== false) {
+    throw new FeError(`Expected proper list, got dotted tail ${feFormat(cur, true)}`);
   }
   return out;
 }
@@ -70,20 +83,67 @@ export function isTruthy(val) {
   return val !== NIL && val !== false && val !== undefined;
 }
 
-export function feEqual(a, b) {
-  if (a === b) return true;
-  if (a instanceof Sym && b instanceof Sym) return a.name === b.name;
-  if (a instanceof Cons && b instanceof Cons) {
-    return feEqual(a.car, b.car) && feEqual(a.cdr, b.cdr);
+export function feEqual(a, b, visited = new WeakMap()) {
+  const stack = [[a, b]];
+
+  while (stack.length > 0) {
+    let [curA, curB] = stack.pop();
+    curA = curA === false ? NIL : curA;
+    curB = curB === false ? NIL : curB;
+
+    while (true) {
+      if (curA === curB) break;
+      if (curA instanceof Sym && curB instanceof Sym) {
+        if (curA.name !== curB.name) return false;
+        break;
+      }
+      if (curA instanceof Cons && curB instanceof Cons) {
+        let seenWithB = visited.get(curA);
+        if (!seenWithB) {
+          seenWithB = new WeakSet();
+          visited.set(curA, seenWithB);
+        }
+        if (seenWithB.has(curB)) break;
+        seenWithB.add(curB);
+
+        stack.push([curA.cdr, curB.cdr]);
+        curA = curA.car === false ? NIL : curA.car;
+        curB = curB.car === false ? NIL : curB.car;
+        continue;
+      }
+      return false;
+    }
   }
-  return false;
+  return true;
 }
 
-export function feFormat(val, quoted = false) {
+function collectCycleNodes(root) {
+  const cycles = new Set();
+  const state = new WeakMap(); // 0 = visiting, 1 = visited
+
+  function dfs(node) {
+    if (!(node instanceof Cons)) return;
+    const st = state.get(node);
+    if (st === 0) {
+      cycles.add(node);
+      return;
+    }
+    if (st === 1) return;
+    state.set(node, 0);
+    dfs(node.car);
+    dfs(node.cdr);
+    state.set(node, 1);
+  }
+
+  dfs(root);
+  return cycles;
+}
+
+export function feFormat(val, quoted = false, cycles = null, active = null) {
   if (val === NIL) return "nil";
   if (val === true) return "t";
   if (val === false) return "nil";
-  if (typeof val === "number") return Number.isFinite(val) ? String(val) : "0";
+  if (typeof val === "number") return String(val);
   if (typeof val === "string") {
     return quoted ? JSON.stringify(val) : val;
   }
@@ -93,15 +153,34 @@ export function feFormat(val, quoted = false) {
   }
   if (val instanceof NativeFn) return "<cfunc>";
   if (val instanceof Cons) {
+    const cycleSet = cycles ?? collectCycleNodes(val);
+    const activeSet = active ?? new Set();
+
+    if (cycleSet.has(val) && activeSet.has(val)) {
+      return "(...)";
+    }
+
+    const spineActive = new Set(activeSet);
+    spineActive.add(val);
+
     const parts = [];
     let cur = val;
     while (cur instanceof Cons) {
-      parts.push(feFormat(cur.car, true));
-      cur = cur.cdr;
+      parts.push(feFormat(cur.car, true, cycleSet, spineActive));
+      const next = cur.cdr;
+      if (next instanceof Cons) {
+        if (cycleSet.has(next) && spineActive.has(next)) {
+          parts.push(".");
+          parts.push("(...)");
+          return `(${parts.join(" ")})`;
+        }
+        spineActive.add(next);
+      }
+      cur = next;
     }
-    if (cur !== NIL) {
+    if (cur !== NIL && cur !== false) {
       parts.push(".");
-      parts.push(feFormat(cur, true));
+      parts.push(feFormat(cur, true, cycleSet, spineActive));
     }
     return `(${parts.join(" ")})`;
   }
@@ -109,6 +188,15 @@ export function feFormat(val, quoted = false) {
 }
 
 // --- Tokenizer & Reader ---
+
+const ESCAPE_MAP = Object.freeze({
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  "0": "\0",
+  "\\": "\\",
+  '"': '"',
+});
 
 function tokenize(src) {
   const tokens = [];
@@ -118,28 +206,24 @@ function tokenize(src) {
   while (i < n) {
     const ch = src[i];
 
-    // Whitespace
     if (/\s/.test(ch)) {
       i++;
       continue;
     }
 
-    // Semicolon comment to end of line
     if (ch === ";") {
       while (i < n && src[i] !== "\n") i++;
       continue;
     }
 
-    // Parentheses & quote
     if (ch === "(" || ch === ")" || ch === "'") {
       tokens.push({ type: ch, value: ch });
       i++;
       continue;
     }
 
-    // String literal
     if (ch === '"') {
-      i++; // skip opening "
+      i++;
       let str = "";
       let closed = false;
       while (i < n) {
@@ -150,8 +234,7 @@ function tokenize(src) {
         }
         if (c === "\\" && i < n) {
           const esc = src[i++];
-          const map = { n: "\n", r: "\r", t: "\t", "\\": "\\", '"': '"' };
-          str += esc in map ? map[esc] : esc;
+          str += Object.prototype.hasOwnProperty.call(ESCAPE_MAP, esc) ? ESCAPE_MAP[esc] : esc;
         } else {
           str += c;
         }
@@ -163,7 +246,6 @@ function tokenize(src) {
       continue;
     }
 
-    // Atom (number or symbol)
     let atom = "";
     while (i < n && !/[\s();"']/.test(src[i])) {
       atom += src[i++];
@@ -187,9 +269,12 @@ export function readAll(src, ctx) {
     }
 
     if (tok.type === "'") {
+      if (pos >= tokens.length || tokens[pos].type === ")") {
+        throw new FeError("Expected expression after quote");
+      }
       const target = parseOne();
       if (target === undefined) {
-        throw new FeError("Unexpected end of input after quote");
+        throw new FeError("Expected expression after quote");
       }
       return new Cons(ctx.sym("quote"), new Cons(target, NIL));
     }
@@ -203,7 +288,7 @@ export function readAll(src, ctx) {
           throw new FeError("Unterminated '('");
         }
         if (tokens[pos].type === ")") {
-          pos++; // consume ')'
+          pos++;
           break;
         }
         const elem = parseOne();
@@ -211,15 +296,21 @@ export function readAll(src, ctx) {
           if (items.length === 0 || dottedTail !== null) {
             throw new FeError("Invalid dotted pair syntax");
           }
+          if (pos >= tokens.length || tokens[pos].type === ")") {
+            throw new FeError("Expected expression after '.'");
+          }
           const tailObj = parseOne();
           if (tailObj === undefined) {
             throw new FeError("Expected expression after '.'");
+          }
+          if (tailObj instanceof Sym && tailObj.name === ".") {
+            throw new FeError("Invalid dotted pair tail '.'");
           }
           dottedTail = tailObj;
           if (pos >= tokens.length || tokens[pos].type !== ")") {
             throw new FeError("Expected ')' after dotted pair tail");
           }
-          pos++; // consume ')'
+          pos++;
           break;
         }
         items.push(elem);
@@ -232,10 +323,16 @@ export function readAll(src, ctx) {
       return tok.value;
     }
 
-    // Atom: check if valid finite number (avoid empty string or lone '-' / '+')
     if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(tok.value)) {
       const num = Number(tok.value);
-      if (Number.isFinite(num)) return num;
+      if (!Number.isFinite(num)) {
+        throw new FeError(`Numeric literal out of range: ${tok.value}`);
+      }
+      return num;
+    }
+
+    if (/^[+-]?(?:\d|\.\d)[\d.eE+-]*$/.test(tok.value) && (tok.value.includes(".") || /[eE]/.test(tok.value))) {
+      throw new FeError(`Malformed numeric literal: ${tok.value}`);
     }
 
     return ctx.sym(tok.value);
@@ -255,11 +352,12 @@ export class FeContext {
   constructor(options = {}) {
     this.symbols = new Map();
     this.callStack = [];
+    this.rootEnv = NIL;
     this.output = options.output ?? ((text) => {
       if (typeof process !== "undefined" && process.stdout) {
         process.stdout.write(text);
       } else {
-        console.log(text);
+        console.log(text.replace(/\n$/, ""));
       }
     });
 
@@ -289,27 +387,28 @@ export class FeContext {
   }
 
   _bindParams(paramsList, argsList, baseEnv) {
-    const params = listToArray(paramsList);
-    const args = listToArray(argsList);
+    const args = listToArray(argsList, { requireProper: true });
     let env = baseEnv;
+    let cur = paramsList;
+    let idx = 0;
 
-    for (let i = 0; i < params.length; i++) {
-      const p = params[i];
+    while (cur instanceof Cons) {
+      const p = cur.car;
       if (!(p instanceof Sym)) {
         throw new FeError(`Parameter must be a symbol, got ${feFormat(p)}`);
       }
-      if (p.name === ".") {
-        // Variadic rest parameter: (fn (a . rest) ...)
-        const restName = params[i + 1];
-        if (!(restName instanceof Sym) || params.length !== i + 2) {
-          throw new FeError("Invalid variadic parameter syntax");
-        }
-        const restList = arrayToList(args.slice(i));
-        env = new Cons(new Cons(restName, restList), env);
-        break;
-      }
-      const val = i < args.length ? args[i] : NIL;
+      const val = idx < args.length ? args[idx] : NIL;
       env = new Cons(new Cons(p, val), env);
+      idx++;
+      cur = cur.cdr;
+    }
+
+    if (cur !== NIL) {
+      if (!(cur instanceof Sym)) {
+        throw new FeError(`Rest parameter must be a symbol, got ${feFormat(cur)}`);
+      }
+      const restList = arrayToList(args.slice(idx));
+      env = new Cons(new Cons(cur, restList), env);
     }
 
     return env;
@@ -317,43 +416,94 @@ export class FeContext {
 
   _lookup(sym, env) {
     let cur = env;
+    const seen = new Set();
     while (cur instanceof Cons) {
+      if (seen.has(cur)) break;
+      seen.add(cur);
       const entry = cur.car;
       if (entry instanceof Cons && entry.car === sym) {
-        return entry; // returns (sym . val) cell so '=' can mutate local bindings
+        return entry;
       }
       cur = cur.cdr;
     }
     return null;
   }
 
-  _evalBody(bodyList, env) {
+  _bindLet(expr, env, scopeHolder) {
+    const nameSym = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
+    const valExpr =
+      expr.cdr instanceof Cons && expr.cdr.cdr instanceof Cons
+        ? expr.cdr.cdr.car
+        : NIL;
+    if (!(nameSym instanceof Sym)) {
+      throw new FeError(`'let' expects a symbol, got ${feFormat(nameSym)}`);
+    }
+    if (nameSym.name === "nil" || nameSym.name === "t") {
+      throw new FeError(`Cannot rebind built-in constant '${nameSym.name}'`);
+    }
+    const activeEnv = scopeHolder ? scopeHolder.env : env;
+    const val = this.eval(valExpr, activeEnv, scopeHolder);
+    const targetEnv = scopeHolder ? scopeHolder.env : activeEnv;
+    if (scopeHolder?.isolated) {
+      scopeHolder.env = new Cons(new Cons(nameSym, val), targetEnv);
+    } else if (targetEnv === this.rootEnv) {
+      const existing = this._lookup(nameSym, this.rootEnv);
+      if (existing) {
+        existing.cdr = val;
+      } else {
+        this.rootEnv = new Cons(new Cons(nameSym, val), this.rootEnv);
+      }
+      if (scopeHolder) scopeHolder.env = this.rootEnv;
+    } else {
+      const nextEnv = new Cons(new Cons(nameSym, val), targetEnv);
+      if (scopeHolder) {
+        scopeHolder.env = nextEnv;
+      }
+    }
+    return val;
+  }
+
+  _evalBody(bodyList, env, scopeHolder = null) {
+    const scope = scopeHolder ?? { env };
+    if (!scopeHolder) scope.env = env;
     let res = NIL;
     let cur = bodyList;
+    const seen = new Set();
     while (cur instanceof Cons) {
-      res = this.eval(cur.car, env);
+      if (seen.has(cur)) {
+        throw new FeError("Cyclic code list encountered during evaluation");
+      }
+      seen.add(cur);
+      res = this.eval(cur.car, scope.env, scope);
       cur = cur.cdr;
+    }
+    if (cur !== NIL && cur !== false) {
+      throw new FeError(`Expected proper list in body, got dotted tail ${feFormat(cur, true)}`);
     }
     return res;
   }
 
-  _expandMacroInPlace(pair, macro, env) {
+  _expandMacroInPlace(pair, macro, env, scopeHolder) {
+    const activeEnv = scopeHolder ? scopeHolder.env : env;
     const rawArgs = pair.cdr;
     const macroEnv = this._bindParams(macro.params, rawArgs, macro.env);
-    const expanded = this._evalBody(macro.body, macroEnv);
+    const macroScope = { env: macroEnv, isolated: true };
+    const expanded = this._evalBody(macro.body, macroScope.env, macroScope);
 
-    // Mutate pair in-place like rxi/fe so subsequent evaluations use expanded code
     if (expanded instanceof Cons) {
       pair.car = expanded.car;
       pair.cdr = expanded.cdr;
-    } else {
-      pair.car = this.sym("do");
-      pair.cdr = new Cons(expanded, NIL);
+      return this.eval(pair, activeEnv, scopeHolder);
     }
-    return this.eval(pair, env);
+
+    pair.car = this.sym("do");
+    pair.cdr = new Cons(expanded, NIL);
+    return this.eval(pair, activeEnv, scopeHolder);
   }
 
-  eval(expr, env = NIL) {
+  eval(expr, env = this.rootEnv, scopeHolder = null) {
+    const activeEnv = scopeHolder ? scopeHolder.env : env;
+
     if (expr === NIL || typeof expr === "number" || typeof expr === "string" || typeof expr === "boolean") {
       return expr;
     }
@@ -361,7 +511,7 @@ export class FeContext {
     if (expr instanceof Sym) {
       if (expr.name === "nil") return NIL;
       if (expr.name === "t") return true;
-      const local = this._lookup(expr, env);
+      const local = this._lookup(expr, activeEnv);
       if (local) return local.cdr;
       return expr.globalVal;
     }
@@ -373,7 +523,6 @@ export class FeContext {
     const head = expr.car;
     const headName = head instanceof Sym ? head.name : null;
 
-    // Special forms
     if (headName === "quote") {
       return expr.cdr instanceof Cons ? expr.cdr.car : NIL;
     }
@@ -387,8 +536,11 @@ export class FeContext {
       if (!(target instanceof Sym)) {
         throw new FeError(`'=' target must be a symbol, got ${feFormat(target)}`);
       }
-      const val = this.eval(valExpr, env);
-      const local = this._lookup(target, env);
+      if (target.name === "nil" || target.name === "t") {
+        throw new FeError(`Cannot assign to built-in constant '${target.name}'`);
+      }
+      const val = this.eval(valExpr, activeEnv, scopeHolder);
+      const local = this._lookup(target, activeEnv);
       if (local) {
         local.cdr = val;
       } else {
@@ -398,69 +550,63 @@ export class FeContext {
     }
 
     if (headName === "let") {
-      const nameSym = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
-      const valExpr =
-        expr.cdr instanceof Cons && expr.cdr.cdr instanceof Cons
-          ? expr.cdr.cdr.car
-          : NIL;
-      if (!(nameSym instanceof Sym)) {
-        throw new FeError(`'let' expects a symbol, got ${feFormat(nameSym)}`);
-      }
-      const val = this.eval(valExpr, env);
-      const newEntry = new Cons(nameSym, val);
-      // Note: In fe, (let x val) binds in current/enclosing scope; returning new env cell
-      // supports sequential bindings in blocks.
-      env = new Cons(newEntry, env);
-      return val;
+      return this._bindLet(expr, activeEnv, scopeHolder);
     }
 
     if (headName === "if") {
-      const args = listToArray(expr.cdr);
-      const cond = args.length > 0 ? this.eval(args[0], env) : NIL;
+      const args = listToArray(expr.cdr, { requireProper: true });
+      const cond = args.length > 0 ? this.eval(args[0], activeEnv, scopeHolder) : NIL;
       if (isTruthy(cond)) {
-        return args.length > 1 ? this.eval(args[1], env) : NIL;
+        return args.length > 1
+          ? this.eval(args[1], activeEnv, { env: activeEnv, isolated: true })
+          : NIL;
       }
-      return args.length > 2 ? this._evalBody(arrayToList(args.slice(2)), env) : NIL;
+      return args.length > 2
+        ? this._evalBody(arrayToList(args.slice(2)), activeEnv, { env: activeEnv, isolated: true })
+        : NIL;
     }
 
     if (headName === "while") {
-      const args = listToArray(expr.cdr);
+      const args = listToArray(expr.cdr, { requireProper: true });
       if (args.length < 1) throw new FeError("'while' requires a condition");
       const condExpr = args[0];
       const bodyList = arrayToList(args.slice(1));
       let last = NIL;
-      while (isTruthy(this.eval(condExpr, env))) {
-        last = this._evalBody(bodyList, env);
+      while (true) {
+        const curEnv = scopeHolder ? scopeHolder.env : env;
+        if (!isTruthy(this.eval(condExpr, curEnv, scopeHolder))) break;
+        const loopEnv = scopeHolder ? scopeHolder.env : env;
+        const iterScope = { env: loopEnv, isolated: true };
+        last = this._evalBody(bodyList, iterScope.env, iterScope);
       }
       return last;
     }
 
     if (headName === "do") {
-      return this._evalBody(expr.cdr, env);
+      return this._evalBody(expr.cdr, activeEnv, { env: activeEnv, isolated: true });
     }
 
     if (headName === "fn" || headName === "mac") {
       const isMacro = headName === "mac";
       const params = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
       const body = expr.cdr instanceof Cons ? expr.cdr.cdr : NIL;
-      return new Closure(params, body, env, isMacro);
+      return new Closure(params, body, activeEnv, isMacro);
     }
 
-    // Evaluate operator
-    const fnVal = this.eval(head, env);
-
-    if (fnVal instanceof Closure && fnVal.isMacro) {
-      return this._expandMacroInPlace(expr, fnVal, env);
-    }
-
-    const argExprs = listToArray(expr.cdr);
-    const evalArgs = argExprs.map((a) => this.eval(a, env));
-
+    const fnVal = this.eval(head, activeEnv, scopeHolder);
     const label = headName ?? feFormat(head);
+
     this.callStack.push(label);
     try {
+      if (fnVal instanceof Closure && fnVal.isMacro) {
+        return this._expandMacroInPlace(expr, fnVal, activeEnv, scopeHolder);
+      }
+
+      const argExprs = listToArray(expr.cdr, { requireProper: true });
+      const evalArgs = argExprs.map((a) => this.eval(a, activeEnv, scopeHolder));
+
       if (fnVal instanceof NativeFn) {
-        return fnVal.fn(evalArgs, this, env);
+        return fnVal.fn(evalArgs, this, activeEnv, scopeHolder);
       }
       if (fnVal instanceof Closure) {
         const callEnv = this._bindParams(fnVal.params, arrayToList(evalArgs), fnVal.env);
@@ -480,50 +626,146 @@ export class FeContext {
     }
   }
 
-  evalString(src, env = NIL) {
+  evalString(src, env = this.rootEnv) {
+    const isRoot = env === this.rootEnv;
+    const scope = { env: isRoot ? this.rootEnv : env };
     const exprs = readAll(src, this);
     let last = NIL;
     for (const expr of exprs) {
-      last = this.eval(expr, env);
+      if (isRoot) scope.env = this.rootEnv;
+      last = this.eval(expr, scope.env, scope);
+      if (isRoot) {
+        this.rootEnv = scope.env;
+      }
     }
     return last;
   }
 
   _installBuiltins() {
-    // List primitives
-    this.setBuiltin("car", ([a]) => (a instanceof Cons ? a.car : NIL));
-    this.setBuiltin("cdr", ([a]) => (a instanceof Cons ? a.cdr : NIL));
-    this.setBuiltin("cons", ([a, b]) => new Cons(a ?? NIL, b ?? NIL));
+    const checkArity = (name, args, min, max = min) => {
+      if (args.length < min || args.length > max) {
+        const expected = min === max ? `${min}` : `${min}..${max}`;
+        throw new FeError(`'${name}' expects ${expected} argument(s), got ${args.length}`);
+      }
+    };
+
+    this.setBuiltin("car", (args) => {
+      checkArity("car", args, 1);
+      const [a] = args;
+      if (a === NIL || a === false) return NIL;
+      if (!(a instanceof Cons)) {
+        throw new FeError(`'car' expects a pair or nil, got ${feFormat(a, true)}`);
+      }
+      return a.car;
+    });
+    this.setBuiltin("cdr", (args) => {
+      checkArity("cdr", args, 1);
+      const [a] = args;
+      if (a === NIL || a === false) return NIL;
+      if (!(a instanceof Cons)) {
+        throw new FeError(`'cdr' expects a pair or nil, got ${feFormat(a, true)}`);
+      }
+      return a.cdr;
+    });
+    this.setBuiltin("cons", (args) => {
+      checkArity("cons", args, 2);
+      return new Cons(args[0], args[1]);
+    });
+    this.setBuiltin("setcar", (args) => {
+      checkArity("setcar", args, 2);
+      const [pair, val] = args;
+      if (!(pair instanceof Cons)) {
+        throw new FeError(`'setcar' expects a pair, got ${feFormat(pair)}`);
+      }
+      pair.car = val;
+      return pair.car;
+    });
+    this.setBuiltin("setcdr", (args) => {
+      checkArity("setcdr", args, 2);
+      const [pair, val] = args;
+      if (!(pair instanceof Cons)) {
+        throw new FeError(`'setcdr' expects a pair, got ${feFormat(pair)}`);
+      }
+      pair.cdr = val;
+      return pair.cdr;
+    });
     this.setBuiltin("list", (args) => arrayToList(args));
 
-    // Predicates & equality
-    this.setBuiltin("atom", ([a]) => !(a instanceof Cons));
-    this.setBuiltin("is", ([a, b]) => feEqual(a, b));
-    this.setBuiltin("<", ([a, b]) => Number(a) < Number(b));
-    this.setBuiltin("<=", ([a, b]) => Number(a) <= Number(b));
-    this.setBuiltin("=", ([a, b]) => Number(a) === Number(b));
-    this.setBuiltin(">", ([a, b]) => Number(a) > Number(b));
-    this.setBuiltin(">=", ([a, b]) => Number(a) >= Number(b));
+    const toNum = (v) => {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      throw new FeError(`Expected number, got ${feFormat(v, true)}`);
+    };
 
-    // Arithmetic
+    const checkFinite = (n) => {
+      if (!Number.isFinite(n)) {
+        throw new FeError("Numeric overflow");
+      }
+      return n;
+    };
+
+    this.setBuiltin("atom", (args) => {
+      checkArity("atom", args, 1);
+      return !(args[0] instanceof Cons) ? true : NIL;
+    });
+    this.setBuiltin("is", (args) => {
+      checkArity("is", args, 2);
+      return feEqual(args[0], args[1]) ? true : NIL;
+    });
+    this.setBuiltin("<", (args) => {
+      checkArity("<", args, 2);
+      return toNum(args[0]) < toNum(args[1]) ? true : NIL;
+    });
+    this.setBuiltin("<=", (args) => {
+      checkArity("<=", args, 2);
+      return toNum(args[0]) <= toNum(args[1]) ? true : NIL;
+    });
+    this.setBuiltin("==", (args) => {
+      checkArity("==", args, 2);
+      return toNum(args[0]) === toNum(args[1]) ? true : NIL;
+    });
+    this.setBuiltin(">", (args) => {
+      checkArity(">", args, 2);
+      return toNum(args[0]) > toNum(args[1]) ? true : NIL;
+    });
+    this.setBuiltin(">=", (args) => {
+      checkArity(">=", args, 2);
+      return toNum(args[0]) >= toNum(args[1]) ? true : NIL;
+    });
+
     this.setBuiltin("+", (args) => {
       if (args.length === 0) return 0;
-      return args.reduce((acc, v) => acc + Number(v), 0);
+      const sum = args.reduce((acc, v) => acc + toNum(v), 0);
+      return checkFinite(sum);
     });
     this.setBuiltin("-", (args) => {
       if (args.length === 0) return 0;
-      if (args.length === 1) return -Number(args[0]);
-      return args.slice(1).reduce((acc, v) => acc - Number(v), Number(args[0]));
+      if (args.length === 1) return checkFinite(-toNum(args[0]));
+      const diff = args.slice(1).reduce((acc, v) => acc - toNum(v), toNum(args[0]));
+      return checkFinite(diff);
     });
-    this.setBuiltin("*", (args) => args.reduce((acc, v) => acc * Number(v), 1));
+    this.setBuiltin("*", (args) => {
+      const prod = args.reduce((acc, v) => acc * toNum(v), 1);
+      return checkFinite(prod);
+    });
     this.setBuiltin("/", (args) => {
       if (args.length === 0) return 0;
-      if (args.length === 1) return 1 / Number(args[0]);
-      return args.slice(1).reduce((acc, v) => acc / Number(v), Number(args[0]));
+      if (args.length === 1) {
+        const d = toNum(args[0]);
+        if (d === 0) throw new FeError("Division by zero");
+        return checkFinite(1 / d);
+      }
+      const quot = args.slice(1).reduce((acc, v) => {
+        const d = toNum(v);
+        if (d === 0) throw new FeError("Division by zero");
+        return checkFinite(acc / d);
+      }, toNum(args[0]));
+      return checkFinite(quot);
     });
 
-    // Eval & I/O
-    this.setBuiltin("eval", ([a], ctx, env) => ctx.eval(a, env));
+    this.setBuiltin("eval", (args, ctx, env, scopeHolder) => {
+      checkArity("eval", args, 1);
+      return ctx.eval(args[0], env, scopeHolder);
+    });
     this.setBuiltin("print", (args, ctx) => {
       const line = args.map((v) => feFormat(v, false)).join(" ") + "\n";
       ctx.output(line);

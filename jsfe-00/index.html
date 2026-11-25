@@ -67,26 +67,38 @@
   <pre id="out"></pre>
 
   <script type="module">
-    import { FeContext, FeError, feFormat } from "./fe.js";
-
     const codeEl = document.getElementById("code");
     const outEl = document.getElementById("out");
     const runBtn = document.getElementById("run");
 
-    function execute() {
+    function appendOutput(text) {
+      const prefix = outEl.textContent ? "\n" : "";
+      outEl.textContent += `${prefix}${text}`;
+    }
+
+    let feModulePromise = null;
+    function loadInterpreter() {
+      if (!feModulePromise) {
+        feModulePromise = import("./fe.js");
+      }
+      return feModulePromise;
+    }
+
+    async function execute() {
       outEl.textContent = "";
-      const ctx = new FeContext({
-        output: (text) => {
-          outEl.textContent += text;
-        },
-      });
       try {
+        const { FeContext, FeError, feFormat } = await loadInterpreter();
+        const ctx = new FeContext({
+          output: (text) => {
+            outEl.textContent += text;
+          },
+        });
         const res = ctx.evalString(codeEl.value);
-        outEl.textContent += `\n=> ${feFormat(res, true)}`;
+        appendOutput(`=> ${feFormat(res, true)}`);
       } catch (err) {
-        outEl.textContent += `\nError: ${err.message}`;
+        appendOutput(`Error: ${err?.message ?? String(err)}`);
         if (err instanceof FeError && err.stackTrace.length) {
-          outEl.textContent += `\nStack: ${err.stackTrace.join(" <- ")}`;
+          appendOutput(`Stack: ${err.stackTrace.join(" <- ")}`);
         }
       }
     }

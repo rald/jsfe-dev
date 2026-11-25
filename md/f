@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "./$1"
+find "$2" -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.fe"  -o -name "*.json" \)
