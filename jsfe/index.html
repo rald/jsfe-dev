@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>rxi/fe — JS/ES6 Interpreter</title>
+  <style>
+    body {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      max-width: 820px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      background: #141619;
+      color: #e6edf3;
+    }
+    textarea {
+      width: 100%;
+      height: 220px;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.75rem;
+      font-family: inherit;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 0.75rem;
+      padding: 0.5rem 1rem;
+      background: #238636;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { background: #2ea043; }
+    pre {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.75rem;
+      min-height: 140px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h2>rxi/fe Interpreter (ES6)</h2>
+  <textarea id="code">
+(= reverse (fn (lst)
+  (= res nil)
+  (while lst
+    (= res (cons (car lst) res))
+    (= lst (cdr lst)))
+  res))
+
+(= animals '("cat" "dog" "fox"))
+(print (reverse animals))
+(+ 10 (* 4 5))
+  </textarea>
+  <div>
+    <button id="run">Run (Ctrl/Cmd + Enter)</button>
+  </div>
+  <h3>Output</h3>
+  <pre id="out"></pre>
+
+  <script type="module">
+    const codeEl = document.getElementById("code");
+    const outEl = document.getElementById("out");
+    const runBtn = document.getElementById("run");
+
+    function appendOutput(text) {
+      const prefix = outEl.textContent ? "\n" : "";
+      outEl.textContent += `${prefix}${text}`;
+    }
+
+    let feModulePromise = null;
+    function loadInterpreter() {
+      if (!feModulePromise) {
+        feModulePromise = import("./fe.js");
+      }
+      return feModulePromise;
+    }
+
+    function extractLoadTargets(src) {
+      const targets = new Set();
+      const re = /\(\s*load\s+"((?:\\.|[^"\\])*)"\s*\)/g;
+      for (const match of src.matchAll(re)) {
+        try {
+          targets.add(JSON.parse(`"${match[1]}"`));
+        } catch {
+          targets.add(match[1]);
+        }
+      }
+      return targets;
+    }
+
+    async function prefetchFiles(entrySrc, files = new Map(), visiting = new Set()) {
+      const targets = extractLoadTargets(entrySrc);
+      for (const filePath of targets) {
+        if (files.has(filePath) || visiting.has(filePath)) continue;
+        visiting.add(filePath);
+        try {
+          const resp = await fetch(filePath);
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status} while fetching '${filePath}'`);
+          }
+          const text = await resp.text();
+          files.set(filePath, text);
+          await prefetchFiles(text, files, visiting);
+        } finally {
+          visiting.delete(filePath);
+        }
+      }
+      return files;
+    }
+
+    async function execute() {
+      outEl.textContent = "";
+      try {
+        const { FeContext, FeError, feFormat } = await loadInterpreter();
+        const files = await prefetchFiles(codeEl.value);
+        const ctx = new FeContext({
+          files,
+          output: (text) => {
+            outEl.textContent += text;
+          },
+        });
+        const res = ctx.evalString(codeEl.value);
+        appendOutput(`=> ${feFormat(res, true)}`);
+      } catch (err) {
+        appendOutput(`Error: ${err?.message ?? String(err)}`);
+        if (err instanceof FeError && err.stackTrace.length) {
+          appendOutput(`Stack: ${err.stackTrace.join(" <- ")}`);
+        }
+      }
+    }
+
+    runBtn.addEventListener("click", execute);
+    codeEl.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        execute();
+      }
+    });
+  </script>
+</body>
+</html>
