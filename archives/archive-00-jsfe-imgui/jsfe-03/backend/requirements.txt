@@ -1,3 +1,0 @@
-bottle==0.12.25
-legacy-cgi==2.6.4
-

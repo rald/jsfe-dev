@@ -1,0 +1,64 @@
+; Comprehensive example.fe demonstrating fe interpreter features
+
+(print "=== 1. Literals, Quotes, Dotted Pairs & Lists ===")
+(= pair (cons "head" "tail"))
+(print "Pair:" pair "Car:" (car pair) "Cdr:" (cdr pair))
+
+(= nums (list 10 20 30 40))
+(= quoted-syms '(alpha beta gamma))
+(print "Nums:" nums "Quoted syms:" quoted-syms)
+(print "Is list atom?" (atom nums) "Is 10 atom?" (atom 10))
+(print "nil is false?" (is nil false) "10 is 10?" (is 10 10))
+
+(print "=== 2. Arithmetic & Comparisons ===")
+(= a 15)
+(= b 4)
+(print "a + b =" (+ a b))
+(print "a - b =" (- a b))
+(print "negate b =" (- b))
+(print "a * b =" (* a b))
+(print "a / b =" (/ a b))
+(print "reciprocal of b =" (/ b))
+(print "Comparisons (< <= = > >=):" (< b a) (<= a 15) (= a 15) (> a b) (>= b a))
+
+(print "=== 3. Closures, Mutation (=), let, if & while ===")
+(= make-accumulator (fn (start)
+  (let step 1)
+  (fn (delta)
+    (if delta
+      (= start (+ start delta))
+      (= start (+ start step)))
+    start)))
+
+(= acc (make-accumulator 0))
+(print "Acc +1:" (acc))
+(print "Acc +5:" (acc 5))
+(print "Acc +1:" (acc))
+
+(= sum-to (fn (n)
+  (= i 1)
+  (= total 0)
+  (while (<= i n)
+    (= total (+ total i))
+    (= i (+ i 1)))
+  total))
+
+(print "Sum 1..10:" (sum-to 10))
+
+(print "=== 4. Variadic Functions (fn (first . rest) ...) ===")
+(= summarize (fn (label . items)
+  (do
+    (print "Label:" label "First:" (car items) "Rest:" (cdr items))
+    (cons label items))))
+
+(print "Summary:" (summarize "scores" 88 92 95))
+
+(print "=== 5. Macros (mac) & Dynamic eval ===")
+(= when (mac (cond body)
+  (list 'if cond body nil)))
+
+(when (> a b)
+  (print "Macro 'when' triggered because a > b"))
+
+(= dynamic-expr '(+ (* 6 7) 8))
+(print "Evaluating" dynamic-expr "=>" (eval dynamic-expr))

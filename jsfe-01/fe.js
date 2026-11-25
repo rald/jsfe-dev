@@ -1,1035 +1,535 @@
-/**
- * ============================================================================
- * fe.js — ES6 Port of rxi's `fe` Tiny Lisp Interpreter
- * Faithful to fe.h and fe.c (v1.0) with Seamless JS Interop Bridge
- * Updated with async fetch() support in `load` and async evaluation
- * ============================================================================
- */
+// fe.js — Zero-dependency ES6 implementation of rxi/fe semantics for Web & CLI
 
-export const FE_TYPE = Object.freeze({
-  PAIR: 0,
-  FREE: 1,
-  NIL: 2,
-  NUMBER: 3,
-  SYMBOL: 4,
-  STRING: 5,
-  FUNC: 6,
-  MACRO: 7,
-  PRIM: 8,
-  CFUNC: 9,
-  PTR: 10
-});
+export const NIL = Symbol.for("fe.nil");
 
-export const FE_TYPENAMES = Object.freeze([
-  "pair", "free", "nil", "number", "symbol", "string",
-  "func", "macro", "prim", "cfunc", "ptr"
-]);
-
-export const PRIM = Object.freeze({
-  LET: 0, SET: 1, IF: 2, FN: 3, MAC: 4, WHILE: 5, QUOTE: 6,
-  AND: 7, OR: 8, DO: 9, CONS: 10, CAR: 11, CDR: 12, SETCAR: 13,
-  SETCDR: 14, LIST: 15, NOT: 16, IS: 17, ATOM: 18, PRINT: 19,
-  LT: 20, LTE: 21, ADD: 22, SUB: 23, MUL: 24, DIV: 25
-});
-
-export const PRIM_NAMES = Object.freeze([
-  "let", "=", "if", "fn", "mac", "while", "quote", "and", "or", "do", "cons",
-  "car", "cdr", "setcar", "setcdr", "list", "not", "is", "atom", "print", "<",
-  "<=", "+", "-", "*", "/"
-]);
-
-let _nextObjId = 1;
-
-export class FeObject {
-  constructor(type, car, cdr, line, col) {
-    this.id = _nextObjId++;
-    this.type = type;
-    this.car = car !== undefined ? car : null;
-    this.cdr = cdr !== undefined ? cdr : null;
-    this.line = line !== undefined ? line : null;
-    this.col = col !== undefined ? col : null;
+export class Cons {
+  constructor(car = NIL, cdr = NIL) {
+    this.car = car;
+    this.cdr = cdr;
   }
 }
 
-export class FeRuntimeError extends Error {
-  constructor(message, trace, line, col) {
+export class Sym {
+  constructor(name, globalVal = undefined) {
+    this.name = name;
+    this.globalVal = globalVal;
+  }
+  toString() {
+    return this.name;
+  }
+}
+
+export class Closure {
+  constructor(params, body, env, isMacro = false) {
+    this.params = params; // Array of parameter names (or variadic rest param)
+    this.body = body;     // Cons list of expressions
+    this.env = env;       // Lexical environment (Cons list of (sym . val) pairs)
+    this.isMacro = isMacro;
+  }
+}
+
+export class NativeFn {
+  constructor(fn) {
+    this.fn = fn;
+  }
+}
+
+export class FeError extends Error {
+  constructor(message, stack = []) {
     super(message);
-    this.name = "FeRuntimeError";
-    this.trace = trace || [];
-    this.line = line !== undefined ? line : null;
-    this.col = col !== undefined ? col : null;
+    this.name = "FeError";
+    this.stackTrace = stack;
   }
 }
 
-export class StringStream {
-  constructor(source) {
-    this.source = typeof source === "string" ? source : String(source ?? "");
-    this.pos = 0;
-    this.line = 1;
-    this.col = 0;
-  }
+export function isList(x) {
+  let cur = x;
+  while (cur instanceof Cons) cur = cur.cdr;
+  return cur === NIL;
+}
 
-  readChar() {
-    if (this.pos >= this.source.length) return "\0";
-    const ch = this.source.charAt(this.pos++);
-    if (ch === "\n") {
-      this.line++;
-      this.col = 0;
-    } else {
-      this.col++;
+export function listToArray(x) {
+  const out = [];
+  let cur = x;
+  while (cur instanceof Cons) {
+    out.push(cur.car);
+    cur = cur.cdr;
+  }
+  return out;
+}
+
+export function arrayToList(arr, tail = NIL) {
+  let cur = tail;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    cur = new Cons(arr[i], cur);
+  }
+  return cur;
+}
+
+export function isTruthy(val) {
+  return val !== NIL && val !== false && val !== undefined;
+}
+
+export function feEqual(a, b) {
+  const x = a === false ? NIL : a;
+  const y = b === false ? NIL : b;
+  if (x === y) return true;
+  if (x instanceof Sym && y instanceof Sym) return x.name === y.name;
+  if (x instanceof Cons && y instanceof Cons) {
+    return feEqual(x.car, y.car) && feEqual(x.cdr, y.cdr);
+  }
+  return false;
+}
+
+export function feFormat(val, quoted = false) {
+  if (val === NIL) return "nil";
+  if (val === true) return "t";
+  if (val === false) return "nil";
+  if (typeof val === "number") return Number.isFinite(val) ? String(val) : "0";
+  if (typeof val === "string") {
+    return quoted ? JSON.stringify(val) : val;
+  }
+  if (val instanceof Sym) return val.name;
+  if (val instanceof Closure) {
+    return val.isMacro ? "<macro>" : "<fn>";
+  }
+  if (val instanceof NativeFn) return "<cfunc>";
+  if (val instanceof Cons) {
+    const parts = [];
+    let cur = val;
+    while (cur instanceof Cons) {
+      parts.push(feFormat(cur.car, true));
+      cur = cur.cdr;
     }
-    return ch;
+    if (cur !== NIL) {
+      parts.push(".");
+      parts.push(feFormat(cur, true));
+    }
+    return `(${parts.join(" ")})`;
   }
+  return String(val);
 }
 
-const STRICT_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+// --- Tokenizer & Reader ---
+
+function tokenize(src) {
+  const tokens = [];
+  let i = 0;
+  const n = src.length;
+
+  while (i < n) {
+    const ch = src[i];
+
+    // Whitespace
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+
+    // Semicolon comment to end of line
+    if (ch === ";") {
+      while (i < n && src[i] !== "\n") i++;
+      continue;
+    }
+
+    // Parentheses & quote
+    if (ch === "(" || ch === ")" || ch === "'") {
+      tokens.push({ type: ch, value: ch });
+      i++;
+      continue;
+    }
+
+    // String literal
+    if (ch === '"') {
+      i++; // skip opening "
+      let str = "";
+      let closed = false;
+      while (i < n) {
+        const c = src[i++];
+        if (c === '"') {
+          closed = true;
+          break;
+        }
+        if (c === "\\" && i < n) {
+          const esc = src[i++];
+          const map = { n: "\n", r: "\r", t: "\t", "\\": "\\", '"': '"' };
+          str += esc in map ? map[esc] : esc;
+        } else {
+          str += c;
+        }
+      }
+      if (!closed) {
+        throw new FeError("Unterminated string literal");
+      }
+      tokens.push({ type: "string", value: str });
+      continue;
+    }
+
+    // Atom (number or symbol)
+    let atom = "";
+    while (i < n && !/[\s();"']/.test(src[i])) {
+      atom += src[i++];
+    }
+    tokens.push({ type: "atom", value: atom });
+  }
+
+  return tokens;
+}
+
+export function readAll(src, ctx) {
+  const tokens = tokenize(src);
+  let pos = 0;
+
+  function parseOne() {
+    if (pos >= tokens.length) return undefined;
+    const tok = tokens[pos++];
+
+    if (tok.type === ")") {
+      throw new FeError("Unexpected ')'");
+    }
+
+    if (tok.type === "'") {
+      const target = parseOne();
+      if (target === undefined) {
+        throw new FeError("Unexpected end of input after quote");
+      }
+      return new Cons(ctx.sym("quote"), new Cons(target, NIL));
+    }
+
+    if (tok.type === "(") {
+      const items = [];
+      let dottedTail = null;
+
+      while (true) {
+        if (pos >= tokens.length) {
+          throw new FeError("Unterminated '('");
+        }
+        if (tokens[pos].type === ")") {
+          pos++; // consume ')'
+          break;
+        }
+        const elem = parseOne();
+        if (elem instanceof Sym && elem.name === ".") {
+          if (items.length === 0 || dottedTail !== null) {
+            throw new FeError("Invalid dotted pair syntax");
+          }
+          const tailObj = parseOne();
+          if (tailObj === undefined) {
+            throw new FeError("Expected expression after '.'");
+          }
+          dottedTail = tailObj;
+          if (pos >= tokens.length || tokens[pos].type !== ")") {
+            throw new FeError("Expected ')' after dotted pair tail");
+          }
+          pos++; // consume ')'
+          break;
+        }
+        items.push(elem);
+      }
+
+      return arrayToList(items, dottedTail ?? NIL);
+    }
+
+    if (tok.type === "string") {
+      return tok.value;
+    }
+
+    // Atom: check if valid finite number (avoid empty string or lone '-' / '+')
+    if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(tok.value)) {
+      const num = Number(tok.value);
+      if (Number.isFinite(num)) return num;
+    }
+
+    return ctx.sym(tok.value);
+  }
+
+  const exprs = [];
+  while (pos < tokens.length) {
+    const expr = parseOne();
+    if (expr !== undefined) exprs.push(expr);
+  }
+  return exprs;
+}
+
+// --- Interpreter Context ---
 
 export class FeContext {
   constructor(options = {}) {
-    this.onPrint = typeof options.onPrint === "function"
-      ? options.onPrint
-      : ((text) => {
-          if (typeof console !== "undefined" && typeof console.log === "function") {
-            console.log(text);
-          }
-        });
-
-    this.nil = new FeObject(FE_TYPE.NIL, null, null);
-    this._rparen = new FeObject(FE_TYPE.NIL, null, null);
-
-    this.symlist = this.nil;
-    this.calllist = this.nil;
-    this.nextchr = "";
-    this.nextline = 1;
-    this.nextcol = 0;
-
-    this.t = this.symbol("t");
-    this.set(this.t, this.t);
-
-    for (let i = 0; i < PRIM_NAMES.length; i++) {
-      const name = PRIM_NAMES[i];
-      const primObj = new FeObject(FE_TYPE.PRIM, null, i);
-      this.set(this.symbol(name), primObj);
-    }
-
-    const readSourceFile = async (ctx, filePath, line, col) => {
-      if (typeof fetch === "function") {
-        let response;
-        try {
-          response = await fetch(filePath);
-        } catch (e) {
-          ctx.error(
-            `failed to load "${filePath}": ${e && e.message ? e.message : String(e)}`,
-            line,
-            col
-          );
-        }
-        if (!response || !response.ok) {
-          const statusText = response && response.status !== undefined ? ` (status ${response.status})` : "";
-          ctx.error(
-            `failed to load "${filePath}"${statusText}`,
-            line,
-            col
-          );
-        }
-        return await response.text();
-      }
-
-      if (typeof require === "function") {
-        try {
-          const fs = require("fs");
-          return fs.readFileSync(filePath, "utf8");
-        } catch (err) {
-          ctx.error(
-            `failed to load "${filePath}": ${err && err.message ? err.message : String(err)}`,
-            line,
-            col
-          );
-        }
-      }
-
-      ctx.error("load is not supported in this environment", line, col);
-    };
-
-    this.defineRaw("load", async (ctx, argsPair) => {
-      const argState = {
-        list: argsPair,
-        line: argsPair && argsPair.line !== undefined ? argsPair.line : null,
-        col: argsPair && argsPair.col !== undefined ? argsPair.col : null
-      };
-      const pathObj = ctx.checkType(ctx.nextArg(argState), FE_TYPE.STRING);
-      const filePath = pathObj.cdr;
-      const source = await readSourceFile(ctx, filePath, pathObj.line, pathObj.col);
-
-      const savedNextChr = ctx.nextchr;
-      const savedNextLine = ctx.nextline;
-      const savedNextCol = ctx.nextcol;
-
-      ctx._resetLookahead();
-      const stream = new StringStream(source);
-      let result = ctx.nil;
-
-      try {
-        let expr;
-        while ((expr = ctx.read(stream)) !== null) {
-          result = await ctx._eval(expr, ctx.nil, null);
-        }
-      } finally {
-        ctx.nextchr = savedNextChr;
-        ctx.nextline = savedNextLine;
-        ctx.nextcol = savedNextCol;
-      }
-
-      return result;
-    });
-  }
-
-  _resetLookahead() {
-    this.nextchr = "";
-    this.nextline = 1;
-    this.nextcol = 0;
-  }
-
-  _readWithPos(stream) {
-    if (this.nextchr) {
-      const bufferedCh = this.nextchr;
-      const bufferedLine = this.nextline;
-      const bufferedCol = this.nextcol;
-      this.nextchr = "";
-      return { ch: bufferedCh, line: bufferedLine, col: bufferedCol };
-    }
-    const line = stream.line;
-    const col = stream.col + 1;
-    const ch = stream.readChar();
-    return { ch, line, col };
-  }
-
-  _unreadWithPos(ch, line, col) {
-    if (ch === "\0" || ch === "") {
-      this.nextchr = "";
-      return;
-    }
-    this.nextchr = ch;
-    this.nextline = line;
-    this.nextcol = col;
-  }
-
-  error(msg, line, col) {
-    const trace = [];
-    let cl = this.calllist;
-    let resolvedLine = line !== undefined ? line : null;
-    let resolvedCol = col !== undefined ? col : null;
-
-    while (!this.isNil(cl)) {
-      const frame = this.car(cl);
-      if ((resolvedLine === null || resolvedCol === null) &&
-          frame && frame.line !== null && frame.line !== undefined &&
-          frame.col !== null && frame.col !== undefined) {
-        resolvedLine = frame.line;
-        resolvedCol = frame.col;
-      }
-      const loc = (frame && frame.line !== null && frame.line !== undefined &&
-                 frame.col !== null && frame.col !== undefined)
-        ? ` (${frame.line}:${frame.col})`
-        : "";
-      trace.push(`${this.toString(frame, true)}${loc}`);
-      cl = this.cdr(cl);
-    }
-
-    this.calllist = this.nil;
-    throw new FeRuntimeError(msg, trace, resolvedLine, resolvedCol);
-  }
-
-  checkType(obj, expectedType) {
-    const safeObj = obj && obj.type !== undefined ? obj : this.nil;
-    if (safeObj.type !== expectedType) {
-      this.error(
-        `expected ${FE_TYPENAMES[expectedType]}, got ${FE_TYPENAMES[safeObj.type]}`,
-        safeObj.line !== undefined ? safeObj.line : null,
-        safeObj.col !== undefined ? safeObj.col : null
-      );
-    }
-    return safeObj;
-  }
-
-  type(obj) {
-    return obj && obj.type !== undefined ? obj.type : FE_TYPE.NIL;
-  }
-
-  isNil(obj) {
-    return !obj || obj === this.nil || obj.type === FE_TYPE.NIL;
-  }
-
-  cons(car, cdr, line, col) {
-    return new FeObject(FE_TYPE.PAIR, car, cdr, line, col);
-  }
-
-  bool(b) {
-    return b ? this.t : this.nil;
-  }
-
-  number(n, line, col) {
-    if (typeof n !== "number" || !Number.isFinite(n)) {
-      this.error("invalid number value", line, col);
-    }
-    const normalized = Object.is(n, -0) ? 0 : n;
-    return new FeObject(FE_TYPE.NUMBER, null, normalized, line, col);
-  }
-
-  string(str, line, col) {
-    return new FeObject(FE_TYPE.STRING, null, String(str), line, col);
-  }
-
-  symbol(name, line, col) {
-    const symName = String(name);
-    if (symName === "nil") {
-      return new FeObject(FE_TYPE.NIL, null, null, line, col);
-    }
-    let cur = this.symlist;
-    while (!this.isNil(cur)) {
-      const existingSym = cur.car;
-      if (existingSym && existingSym.cdr && existingSym.cdr.car && existingSym.cdr.car.cdr === symName) {
-        return new FeObject(
-          FE_TYPE.SYMBOL,
-          null,
-          existingSym.cdr,
-          line !== undefined && line !== null ? line : existingSym.line,
-          col !== undefined && col !== null ? col : existingSym.col
-        );
-      }
-      cur = cur.cdr;
-    }
-    const sym = new FeObject(
-      FE_TYPE.SYMBOL,
-      null,
-      this.cons(this.string(symName), this.nil),
-      line,
-      col
-    );
-    this.symlist = this.cons(sym, this.symlist);
-    return sym;
-  }
-
-  cfunc(fn) {
-    return new FeObject(FE_TYPE.CFUNC, null, fn);
-  }
-
-  ptr(val) {
-    return new FeObject(FE_TYPE.PTR, null, val);
-  }
-
-  list(objs) {
-    if (!Array.isArray(objs)) return this.nil;
-    let res = this.nil;
-    for (let i = objs.length - 1; i >= 0; i--) {
-      res = this.cons(objs[i], res);
-    }
-    return res;
-  }
-
-  car(obj) {
-    if (this.isNil(obj)) return this.nil;
-    return this.checkType(obj, FE_TYPE.PAIR).car;
-  }
-
-  cdr(obj) {
-    if (this.isNil(obj)) return this.nil;
-    return this.checkType(obj, FE_TYPE.PAIR).cdr;
-  }
-
-  nextArg(argState) {
-    const a = argState.list;
-    if (!a || a.type !== FE_TYPE.PAIR) {
-      if (this.isNil(a)) {
-        this.error(
-          "too few arguments",
-          argState.line !== undefined ? argState.line : null,
-          argState.col !== undefined ? argState.col : null
-        );
-      }
-      this.error(
-        "dotted pair in argument list",
-        a && a.line !== undefined && a.line !== null ? a.line : (argState.line !== undefined ? argState.line : null),
-        a && a.col !== undefined && a.col !== null ? a.col : (argState.col !== undefined ? argState.col : null)
-      );
-    }
-    argState.list = a.cdr;
-    return a.car;
-  }
-
-  toNumber(obj) {
-    return this.checkType(obj, FE_TYPE.NUMBER).cdr;
-  }
-
-  toPtr(obj) {
-    return this.checkType(obj, FE_TYPE.PTR).cdr;
-  }
-
-  _getBound(sym, env) {
-    let cur = env;
-    while (!this.isNil(cur)) {
-      const pair = cur.car;
-      if (pair && pair.car && pair.car.cdr && pair.car.cdr.car &&
-          sym && sym.cdr && sym.cdr.car &&
-          pair.car.cdr.car.cdr === sym.cdr.car.cdr) {
-        return pair;
-      }
-      cur = cur.cdr;
-    }
-    return sym.cdr;
-  }
-
-  set(symOrName, val) {
-    const sym = typeof symOrName === "string" ? this.symbol(symOrName) : symOrName;
-    const feVal = val instanceof FeObject ? val : this.fromJS(val);
-    const binding = this._getBound(sym, this.nil);
-    if (binding) {
-      binding.cdr = feVal;
-    }
-    return feVal;
-  }
-
-  get(symOrName) {
-    const sym = typeof symOrName === "string" ? this.symbol(symOrName) : symOrName;
-    const binding = this._getBound(sym, this.nil);
-    const val = binding ? binding.cdr : null;
-    return val && val.type !== undefined ? val : this.nil;
-  }
-
-  toString(obj, qt = true) {
-    if (!obj || obj.type === undefined) return "nil";
-    switch (obj.type) {
-      case FE_TYPE.NIL:
-        return "nil";
-      case FE_TYPE.NUMBER: {
-        const num = Number.isFinite(obj.cdr) ? (Object.is(obj.cdr, -0) ? 0 : obj.cdr) : 0;
-        return String(num);
-      }
-      case FE_TYPE.PAIR: {
-        const parts = [];
-        const seen = new Set();
-        let cur = obj;
-        while (cur && cur.type === FE_TYPE.PAIR) {
-          if (seen.has(cur.id)) {
-            parts.push("...");
-            return `(${parts.join(" ")})`;
-          }
-          seen.add(cur.id);
-          parts.push(this.toString(cur.car, true));
-          cur = cur.cdr;
-        }
-        if (!this.isNil(cur)) {
-          parts.push(".");
-          parts.push(this.toString(cur, true));
-        }
-        return `(${parts.join(" ")})`;
-      }
-      case FE_TYPE.SYMBOL:
-        return obj.cdr && obj.cdr.car ? obj.cdr.car.cdr : "";
-      case FE_TYPE.STRING:
-        if (!qt) return obj.cdr;
-        return `"${String(obj.cdr)
-          .replace(/\\/g, "\\\\")
-          .replace(/"/g, '\\"')
-          .replace(/\n/g, "\\n")
-          .replace(/\r/g, "\\r")
-          .replace(/\t/g, "\\t")}"`;
-      default:
-        return `[${FE_TYPENAMES[obj.type]} #${obj.id}]`;
-    }
-  }
-
-  read(stream) {
-    const obj = this._read(stream);
-    if (obj && obj.obj === this._rparen) {
-      this.error("stray ')'", obj.line, obj.col);
-    }
-    return obj ? obj.obj : null;
-  }
-
-  _read(stream) {
-    const isDelimiter = (ch) => ch === "\0" || " \n\t\r();".includes(ch);
-    let token;
-
-    while (true) {
-      token = this._readWithPos(stream);
-      while (token.ch !== "\0" && " \n\t\r".includes(token.ch)) {
-        token = this._readWithPos(stream);
-      }
-      if (token.ch === ";") {
-        while (token.ch !== "\0" && token.ch !== "\n") {
-          token = this._readWithPos(stream);
-        }
-        continue;
-      }
-      break;
-    }
-
-    const startLine = token.line;
-    const startCol = token.col;
-
-    switch (token.ch) {
-      case "\0":
-        return null;
-
-      case ")":
-        return { obj: this._rparen, line: startLine, col: startCol };
-
-      case "(": {
-        let res = this.nil;
-        let tail = null;
-        let item;
-        while ((item = this._read(stream)) === null || item.obj !== this._rparen) {
-          if (item === null) {
-            this.error("unclosed list", startLine, startCol);
-          }
-          const v = item.obj;
-          if (v && v.type === FE_TYPE.SYMBOL && v.cdr && v.cdr.car && v.cdr.car.cdr === ".") {
-            const dottedItem = this._read(stream);
-            if (!dottedItem || dottedItem.obj === this._rparen) {
-              this.error("unclosed list", startLine, startCol);
-            }
-            const closeItem = this._read(stream);
-            if (!closeItem || closeItem.obj !== this._rparen) {
-              this.error("expected ')' after dotted pair value", dottedItem.line, dottedItem.col);
-            }
-            const dotted = dottedItem.obj;
-            if (tail) {
-              tail.cdr = dotted;
-            } else {
-              res = dotted;
-            }
-            break;
-          } else {
-            const cell = this.cons(v, this.nil, item.line, item.col);
-            if (tail) {
-              tail.cdr = cell;
-            } else {
-              res = cell;
-            }
-            tail = cell;
-          }
-        }
-        if (res && res.type === FE_TYPE.PAIR) {
-          res.line = startLine;
-          res.col = startCol;
-        }
-        return { obj: res, line: startLine, col: startCol };
-      }
-
-      case "'": {
-        const vItem = this._read(stream);
-        if (!vItem || vItem.obj === this._rparen) {
-          this.error("stray '''", startLine, startCol);
-        }
-        const quoted = this.cons(
-          this.symbol("quote", startLine, startCol),
-          this.cons(vItem.obj, this.nil, vItem.line, vItem.col),
-          startLine,
-          startCol
-        );
-        return { obj: quoted, line: startLine, col: startCol };
-      }
-
-      case '"': {
-        let str = "";
-        let cur = this._readWithPos(stream);
-        while (cur.ch !== '"') {
-          if (cur.ch === "\0") {
-            this.error("unclosed string", startLine, startCol);
-          }
-          if (cur.ch === "\\") {
-            cur = this._readWithPos(stream);
-            if (cur.ch === "\0") {
-              this.error("unclosed string", startLine, startCol);
-            }
-            if (cur.ch === "n") cur.ch = "\n";
-            else if (cur.ch === "r") cur.ch = "\r";
-            else if (cur.ch === "t") cur.ch = "\t";
-          }
-          str += cur.ch;
-          cur = this._readWithPos(stream);
-        }
-        return {
-          obj: this.string(str, startLine, startCol),
-          line: startLine,
-          col: startCol
-        };
-      }
-
-      default: {
-        let buf = "";
-        let curAtom = token;
-        while (!isDelimiter(curAtom.ch)) {
-          buf += curAtom.ch;
-          curAtom = this._readWithPos(stream);
-        }
-        this._unreadWithPos(curAtom.ch, curAtom.line, curAtom.col);
-
-        if (buf === "nil") {
-          const nilObj = new FeObject(FE_TYPE.NIL, null, null, startLine, startCol);
-          return { obj: nilObj, line: startLine, col: startCol };
-        }
-        if (STRICT_NUMBER_RE.test(buf) && Number.isFinite(Number(buf))) {
-          return {
-            obj: this.number(Number(buf), startLine, startCol),
-            line: startLine,
-            col: startCol
-          };
-        }
-        return {
-          obj: this.symbol(buf, startLine, startCol),
-          line: startLine,
-          col: startCol
-        };
-      }
-    }
-  }
-
-  async eval(obj) {
-    return await this._eval(obj, this.nil, null);
-  }
-
-  async evalString(source) {
-    const savedNextChr = this.nextchr;
-    const savedNextLine = this.nextline;
-    const savedNextCol = this.nextcol;
-    this._resetLookahead();
-    const stream = new StringStream(source);
-    let result = this.nil;
-    try {
-      let expr;
-      while ((expr = this.read(stream)) !== null) {
-        result = await this._eval(expr, this.nil, null);
-      }
-      return result;
-    } finally {
-      this.nextchr = savedNextChr;
-      this.nextline = savedNextLine;
-      this.nextcol = savedNextCol;
-    }
-  }
-
-  async _evalList(lst, env) {
-    let res = this.nil;
-    let tail = null;
-    const argState = {
-      list: lst,
-      line: lst && lst.line !== undefined ? lst.line : null,
-      col: lst && lst.col !== undefined ? lst.col : null
-    };
-    while (!this.isNil(argState.list)) {
-      const item = this.nextArg(argState);
-      const evaluated = await this._eval(item, env, null);
-      const cell = this.cons(evaluated, this.nil);
-      if (tail) {
-        tail.cdr = cell;
+    this.symbols = new Map();
+    this.callStack = [];
+    this.output = options.output ?? ((text) => {
+      if (typeof process !== "undefined" && process.stdout) {
+        process.stdout.write(text);
       } else {
-        res = cell;
+        console.log(text);
       }
-      tail = cell;
-    }
-    return res;
+    });
+
+    this.nilSym = this.sym("nil");
+    this.nilSym.globalVal = NIL;
+
+    this.tSym = this.sym("t");
+    this.tSym.globalVal = true;
+
+    this._installBuiltins();
   }
 
-  async _doList(lst, env) {
-    let res = this.nil;
-    let curEnv = env;
-    const argState = {
-      list: lst,
-      line: lst && lst.line !== undefined ? lst.line : null,
-      col: lst && lst.col !== undefined ? lst.col : null
-    };
-    while (!this.isNil(argState.list)) {
-      const item = this.nextArg(argState);
-      const envBox = { env: curEnv };
-      res = await this._eval(item, curEnv, envBox);
-      curEnv = envBox.env;
+  sym(name) {
+    if (name === "nil") {
+      if (this.symbols.has("nil")) return this.symbols.get("nil");
     }
-    return res;
+    let s = this.symbols.get(name);
+    if (!s) {
+      s = new Sym(name, NIL);
+      this.symbols.set(name, s);
+    }
+    return s;
   }
 
-  _argsToEnv(prm, arg, env) {
-    let curPrm = prm;
-    let curArg = arg;
-    let curEnv = env;
-    while (!this.isNil(curPrm)) {
-      if (curPrm.type !== FE_TYPE.PAIR) {
-        curEnv = this.cons(this.cons(curPrm, curArg), curEnv);
+  setBuiltin(name, fn) {
+    this.sym(name).globalVal = new NativeFn(fn);
+  }
+
+  _bindParams(paramsList, argsList, baseEnv) {
+    const params = listToArray(paramsList);
+    const args = listToArray(argsList);
+    let env = baseEnv;
+
+    for (let i = 0; i < params.length; i++) {
+      const p = params[i];
+      if (!(p instanceof Sym)) {
+        throw new FeError(`Parameter must be a symbol, got ${feFormat(p)}`);
+      }
+      if (p.name === ".") {
+        // Variadic rest parameter: (fn (a . rest) ...)
+        const restName = params[i + 1];
+        if (!(restName instanceof Sym) || params.length !== i + 2) {
+          throw new FeError("Invalid variadic parameter syntax");
+        }
+        const restList = arrayToList(args.slice(i));
+        env = new Cons(new Cons(restName, restList), env);
         break;
       }
-      curEnv = this.cons(this.cons(curPrm.car, this.car(curArg)), curEnv);
-      curPrm = curPrm.cdr;
-      curArg = this.cdr(curArg);
+      const val = i < args.length ? args[i] : NIL;
+      env = new Cons(new Cons(p, val), env);
     }
-    return curEnv;
+
+    return env;
   }
 
-  async _eval(obj, env, newEnvBox) {
-    if (!obj || obj.type === undefined) {
-      return this.nil;
-    }
-    if (obj.type === FE_TYPE.SYMBOL) {
-      const binding = this._getBound(obj, env);
-      const boundVal = binding ? binding.cdr : null;
-      return boundVal && boundVal.type !== undefined ? boundVal : this.nil;
-    }
-    if (obj.type !== FE_TYPE.PAIR) {
-      return obj;
-    }
-
-    this.calllist = this.cons(obj, this.calllist);
-    let popped = false;
-
-    try {
-      const fn = await this._eval(obj.car, env, null);
-      const argState = {
-        list: obj.cdr,
-        line: obj.line !== undefined && obj.line !== null ? obj.line : (obj.car && obj.car.line !== undefined ? obj.car.line : null),
-        col: obj.col !== undefined && obj.col !== null ? obj.col : (obj.car && obj.car.col !== undefined ? obj.car.col : null)
-      };
-      let res = this.nil;
-
-      const evalArg = async () => await this._eval(this.nextArg(argState), env, null);
-
-      switch (fn.type) {
-        case FE_TYPE.PRIM: {
-          switch (fn.cdr) {
-            case PRIM.LET: {
-              const letSym = this.checkType(this.nextArg(argState), FE_TYPE.SYMBOL);
-              const letVal = await evalArg();
-              if (newEnvBox) {
-                newEnvBox.env = this.cons(this.cons(letSym, letVal), env);
-              }
-              res = letVal;
-              break;
-            }
-
-            case PRIM.SET: {
-              const setSym = this.checkType(this.nextArg(argState), FE_TYPE.SYMBOL);
-              const setVal = await evalArg();
-              const binding = this._getBound(setSym, env);
-              if (binding) {
-                binding.cdr = setVal;
-              }
-              res = setVal;
-              break;
-            }
-
-            case PRIM.IF: {
-              while (!this.isNil(argState.list)) {
-                const cond = await evalArg();
-                if (!this.isNil(cond)) {
-                  res = this.isNil(argState.list) ? cond : await evalArg();
-                  break;
-                }
-                if (this.isNil(argState.list)) break;
-                argState.list = argState.list.cdr;
-              }
-              break;
-            }
-
-            case PRIM.FN:
-            case PRIM.MAC: {
-              const paramsObj = this.nextArg(argState);
-              const bodyObj = argState.list;
-              const closureBody = this.cons(env, this.cons(paramsObj, bodyObj));
-              res = new FeObject(
-                fn.cdr === PRIM.FN ? FE_TYPE.FUNC : FE_TYPE.MACRO,
-                null,
-                closureBody
-              );
-              break;
-            }
-
-            case PRIM.WHILE: {
-              const condExpr = this.nextArg(argState);
-              const bodyList = argState.list;
-              while (!this.isNil(await this._eval(condExpr, env, null))) {
-                res = await this._doList(bodyList, env);
-              }
-              break;
-            }
-
-            case PRIM.QUOTE:
-              res = this.nextArg(argState);
-              break;
-
-            case PRIM.AND:
-              while (!this.isNil(argState.list) && !this.isNil(res = await evalArg())) {}
-              break;
-
-            case PRIM.OR:
-              while (!this.isNil(argState.list) && this.isNil(res = await evalArg())) {}
-              break;
-
-            case PRIM.DO:
-              res = await this._doList(argState.list, env);
-              break;
-
-            case PRIM.CONS: {
-              const consA = await evalArg();
-              res = this.cons(consA, await evalArg());
-              break;
-            }
-
-            case PRIM.CAR:
-              res = this.car(await evalArg());
-              break;
-
-            case PRIM.CDR:
-              res = this.cdr(await evalArg());
-              break;
-
-            case PRIM.SETCAR: {
-              const setcarPair = this.checkType(await evalArg(), FE_TYPE.PAIR);
-              const setcarVal = await evalArg();
-              setcarPair.car = setcarVal;
-              res = setcarVal;
-              break;
-            }
-
-            case PRIM.SETCDR: {
-              const setcdrPair = this.checkType(await evalArg(), FE_TYPE.PAIR);
-              const setcdrVal = await evalArg();
-              setcdrPair.cdr = setcdrVal;
-              res = setcdrVal;
-              break;
-            }
-
-            case PRIM.LIST:
-              res = await this._evalList(argState.list, env);
-              break;
-
-            case PRIM.NOT:
-              res = this.bool(this.isNil(await evalArg()));
-              break;
-
-            case PRIM.IS: {
-              const isA = await evalArg();
-              const isB = await evalArg();
-              res = this.bool(this._equal(isA, isB));
-              break;
-            }
-
-            case PRIM.ATOM:
-              res = this.bool((await evalArg()).type !== FE_TYPE.PAIR);
-              break;
-
-            case PRIM.PRINT: {
-              const parts = [];
-              while (!this.isNil(argState.list)) {
-                parts.push(this.toString(await evalArg(), false));
-              }
-              const printed = parts.join(" ");
-              this.onPrint(printed);
-              res = this.string(printed);
-              break;
-            }
-
-            case PRIM.LT: {
-              const ltA = this.toNumber(await evalArg());
-              const ltB = this.toNumber(await evalArg());
-              res = this.bool(ltA < ltB);
-              break;
-            }
-
-            case PRIM.LTE: {
-              const lteA = this.toNumber(await evalArg());
-              const lteB = this.toNumber(await evalArg());
-              res = this.bool(lteA <= lteB);
-              break;
-            }
-
-            case PRIM.ADD: {
-              let addAcc = this.toNumber(await evalArg());
-              while (!this.isNil(argState.list)) addAcc += this.toNumber(await evalArg());
-              res = this.number(addAcc);
-              break;
-            }
-
-            case PRIM.SUB: {
-              let subAcc = this.toNumber(await evalArg());
-              while (!this.isNil(argState.list)) subAcc -= this.toNumber(await evalArg());
-              res = this.number(subAcc);
-              break;
-            }
-
-            case PRIM.MUL: {
-              let mulAcc = this.toNumber(await evalArg());
-              while (!this.isNil(argState.list)) mulAcc *= this.toNumber(await evalArg());
-              res = this.number(mulAcc);
-              break;
-            }
-
-            case PRIM.DIV: {
-              let divAcc = this.toNumber(await evalArg());
-              while (!this.isNil(argState.list)) {
-                const divisor = this.toNumber(await evalArg());
-                if (divisor === 0) {
-                  this.error("division by zero");
-                }
-                divAcc /= divisor;
-              }
-              res = this.number(divAcc);
-              break;
-            }
-          }
-          break;
-        }
-
-        case FE_TYPE.CFUNC: {
-          const evaledArgs = await this._evalList(argState.list, env);
-          res = await fn.cdr(this, evaledArgs);
-          if (!(res instanceof FeObject)) {
-            res = this.fromJS(res);
-          }
-          break;
-        }
-
-        case FE_TYPE.FUNC: {
-          const funcArgs = await this._evalList(argState.list, env);
-          const funcCapturedEnv = fn.cdr.car;
-          const funcParamsAndBody = fn.cdr.cdr;
-          const funcLocalEnv = this._argsToEnv(funcParamsAndBody.car, funcArgs, funcCapturedEnv);
-          res = await this._doList(funcParamsAndBody.cdr, funcLocalEnv);
-          break;
-        }
-
-        case FE_TYPE.MACRO: {
-          const macCapturedEnv = fn.cdr.car;
-          const macParamsAndBody = fn.cdr.cdr;
-          const macLocalEnv = this._argsToEnv(macParamsAndBody.car, argState.list, macCapturedEnv);
-          const expanded = await this._doList(macParamsAndBody.cdr, macLocalEnv);
-
-          const target = expanded ? new FeObject(expanded.type, expanded.car, expanded.cdr, expanded.line, expanded.col) : this.nil;
-          if (target.type === FE_TYPE.NIL) {
-            target.car = null;
-            target.cdr = null;
-          }
-          if ((target.line === null || target.line === undefined) && obj.line !== undefined) {
-            target.line = obj.line;
-          }
-          if ((target.col === null || target.col === undefined) && obj.col !== undefined) {
-            target.col = obj.col;
-          }
-
-          if (!this.isNil(this.calllist)) {
-            this.calllist = this.calllist.cdr;
-          }
-          popped = true;
-          return await this._eval(target, env, null);
-        }
-
-        default:
-          this.error(
-            "tried to call non-callable value",
-            obj.car && obj.car.line !== undefined ? obj.car.line : (obj.line !== undefined ? obj.line : null),
-            obj.car && obj.car.col !== undefined ? obj.car.col : (obj.col !== undefined ? obj.col : null)
-          );
+  _lookup(sym, env) {
+    let cur = env;
+    while (cur instanceof Cons) {
+      const entry = cur.car;
+      if (entry instanceof Cons && entry.car === sym) {
+        return entry; // returns (sym . val) cell so '=' can mutate local bindings
       }
-
-      return res;
-    } finally {
-      if (!popped && !this.isNil(this.calllist)) {
-        this.calllist = this.calllist.cdr;
-      }
-    }
-  }
-
-  _equal(a, b) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    if (this.isNil(a) && this.isNil(b)) return true;
-    if (a.type !== b.type) return false;
-    if (a.type === FE_TYPE.NUMBER || a.type === FE_TYPE.STRING) {
-      return a.cdr === b.cdr;
-    }
-    if (a.type === FE_TYPE.SYMBOL) {
-      const nameA = a.cdr && a.cdr.car ? a.cdr.car.cdr : null;
-      const nameB = b.cdr && b.cdr.car ? b.cdr.car.cdr : null;
-      return nameA !== null && nameA === nameB;
-    }
-    return false;
-  }
-
-  toArray(pair) {
-    const arr = [];
-    const seen = new Set();
-    let cur = pair;
-    while (!this.isNil(cur)) {
-      if (seen.has(cur.id)) {
-        break;
-      }
-      seen.add(cur.id);
-      if (cur.type !== FE_TYPE.PAIR) {
-        arr.push(this.toJS(cur));
-        break;
-      }
-      arr.push(this.toJS(cur.car));
       cur = cur.cdr;
     }
-    return arr;
+    return null;
   }
 
-  toJS(obj) {
-    if (!obj || this.isNil(obj)) return null;
-    if (this._equal(obj, this.t)) return true;
-    switch (obj.type) {
-      case FE_TYPE.NUMBER:
-      case FE_TYPE.STRING:
-      case FE_TYPE.PTR:
-        return obj.cdr;
-      case FE_TYPE.SYMBOL:
-        return obj.cdr && obj.cdr.car ? obj.cdr.car.cdr : "";
-      case FE_TYPE.PAIR:
-        return this.toArray(obj);
-      default:
-        return obj;
+  _evalBody(bodyList, env) {
+    let res = NIL;
+    let cur = bodyList;
+    while (cur instanceof Cons) {
+      res = this.eval(cur.car, env);
+      cur = cur.cdr;
+    }
+    return res;
+  }
+
+  _expandMacroInPlace(pair, macro, env) {
+    const rawArgs = pair.cdr;
+    const macroEnv = this._bindParams(macro.params, rawArgs, macro.env);
+    const expanded = this._evalBody(macro.body, macroEnv);
+
+    // Mutate pair in-place like rxi/fe so subsequent evaluations use expanded code
+    if (expanded instanceof Cons) {
+      pair.car = expanded.car;
+      pair.cdr = expanded.cdr;
+    } else {
+      pair.car = this.sym("do");
+      pair.cdr = new Cons(expanded, NIL);
+    }
+    return this.eval(pair, env);
+  }
+
+  eval(expr, env = NIL) {
+    if (expr === NIL || typeof expr === "number" || typeof expr === "string" || typeof expr === "boolean") {
+      return expr;
+    }
+
+    if (expr instanceof Sym) {
+      if (expr.name === "nil") return NIL;
+      if (expr.name === "t") return true;
+      const local = this._lookup(expr, env);
+      if (local) return local.cdr;
+      return expr.globalVal;
+    }
+
+    if (!(expr instanceof Cons)) {
+      return expr;
+    }
+
+    const head = expr.car;
+    const headName = head instanceof Sym ? head.name : null;
+
+    // Special forms
+    if (headName === "quote") {
+      return expr.cdr instanceof Cons ? expr.cdr.car : NIL;
+    }
+
+    if (headName === "=") {
+      const target = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
+      const valExpr =
+        expr.cdr instanceof Cons && expr.cdr.cdr instanceof Cons
+          ? expr.cdr.cdr.car
+          : NIL;
+      if (!(target instanceof Sym)) {
+        throw new FeError(`'=' target must be a symbol, got ${feFormat(target)}`);
+      }
+      const val = this.eval(valExpr, env);
+      const local = this._lookup(target, env);
+      if (local) {
+        local.cdr = val;
+      } else {
+        target.globalVal = val;
+      }
+      return val;
+    }
+
+    if (headName === "let") {
+      const nameSym = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
+      const valExpr =
+        expr.cdr instanceof Cons && expr.cdr.cdr instanceof Cons
+          ? expr.cdr.cdr.car
+          : NIL;
+      if (!(nameSym instanceof Sym)) {
+        throw new FeError(`'let' expects a symbol, got ${feFormat(nameSym)}`);
+      }
+      const val = this.eval(valExpr, env);
+      const newEntry = new Cons(nameSym, val);
+      // Note: In fe, (let x val) binds in current/enclosing scope; returning new env cell
+      // supports sequential bindings in blocks.
+      env = new Cons(newEntry, env);
+      return val;
+    }
+
+    if (headName === "if") {
+      const args = listToArray(expr.cdr);
+      const cond = args.length > 0 ? this.eval(args[0], env) : NIL;
+      if (isTruthy(cond)) {
+        return args.length > 1 ? this.eval(args[1], env) : NIL;
+      }
+      return args.length > 2 ? this._evalBody(arrayToList(args.slice(2)), env) : NIL;
+    }
+
+    if (headName === "while") {
+      const args = listToArray(expr.cdr);
+      if (args.length < 1) throw new FeError("'while' requires a condition");
+      const condExpr = args[0];
+      const bodyList = arrayToList(args.slice(1));
+      let last = NIL;
+      while (isTruthy(this.eval(condExpr, env))) {
+        last = this._evalBody(bodyList, env);
+      }
+      return last;
+    }
+
+    if (headName === "do") {
+      return this._evalBody(expr.cdr, env);
+    }
+
+    if (headName === "fn" || headName === "mac") {
+      const isMacro = headName === "mac";
+      const params = expr.cdr instanceof Cons ? expr.cdr.car : NIL;
+      const body = expr.cdr instanceof Cons ? expr.cdr.cdr : NIL;
+      return new Closure(params, body, env, isMacro);
+    }
+
+    // Evaluate operator
+    const fnVal = this.eval(head, env);
+
+    if (fnVal instanceof Closure && fnVal.isMacro) {
+      return this._expandMacroInPlace(expr, fnVal, env);
+    }
+
+    const argExprs = listToArray(expr.cdr);
+    const evalArgs = argExprs.map((a) => this.eval(a, env));
+
+    const label = headName ?? feFormat(head);
+    this.callStack.push(label);
+    try {
+      if (fnVal instanceof NativeFn) {
+        return fnVal.fn(evalArgs, this, env);
+      }
+      if (fnVal instanceof Closure) {
+        const callEnv = this._bindParams(fnVal.params, arrayToList(evalArgs), fnVal.env);
+        return this._evalBody(fnVal.body, callEnv);
+      }
+      throw new FeError(`Cannot call non-function: ${feFormat(fnVal)}`);
+    } catch (err) {
+      if (err instanceof FeError) {
+        if (err.stackTrace.length === 0) {
+          err.stackTrace = [...this.callStack];
+        }
+        throw err;
+      }
+      throw new FeError(err.message ?? String(err), [...this.callStack]);
+    } finally {
+      this.callStack.pop();
     }
   }
 
-  fromJS(val) {
-    if (val instanceof FeObject) return val;
-    if (val === null || val === undefined || val === false) return this.nil;
-    if (val === true) return this.t;
-    if (typeof val === "number") return this.number(val);
-    if (typeof val === "string") return this.string(val);
-    if (Array.isArray(val)) {
-      const mapped = val.map((item) => this.fromJS(item));
-      return this.list(mapped);
+  evalString(src, env = NIL) {
+    const exprs = readAll(src, this);
+    let last = NIL;
+    for (const expr of exprs) {
+      last = this.eval(expr, env);
     }
-    if (typeof val === "function") {
-      return this.cfunc(async (ctx, argsPair) => {
-        const jsArgs = ctx.toArray(argsPair);
-        return ctx.fromJS(await val.apply(null, [ctx, ...jsArgs]));
-      });
-    }
-    return this.ptr(val);
+    return last;
   }
 
-  defineRaw(name, cfunc) {
-    const fnObj = this.cfunc(cfunc);
-    this.set(this.symbol(name), fnObj);
-    return fnObj;
-  }
+  _installBuiltins() {
+    // List primitives
+    this.setBuiltin("car", ([a]) => (a instanceof Cons ? a.car : NIL));
+    this.setBuiltin("cdr", ([a]) => (a instanceof Cons ? a.cdr : NIL));
+    this.setBuiltin("cons", ([a, b]) => new Cons(a ?? NIL, b ?? NIL));
+    this.setBuiltin("list", (args) => arrayToList(args));
 
-  define(name, jsFn) {
-    return this.defineRaw(name, async (ctx, argsPair) => {
-      const jsArgs = ctx.toArray(argsPair);
-      const result = await jsFn.apply(null, [ctx, ...jsArgs]);
-      return ctx.fromJS(result);
+    // Predicates & equality
+    this.setBuiltin("atom", ([a]) => !(a instanceof Cons));
+    this.setBuiltin("is", ([a, b]) => feEqual(a, b));
+    this.setBuiltin("<", ([a, b]) => Number(a) < Number(b));
+    this.setBuiltin("<=", ([a, b]) => Number(a) <= Number(b));
+    this.setBuiltin("=", ([a, b]) => Number(a) === Number(b));
+    this.setBuiltin(">", ([a, b]) => Number(a) > Number(b));
+    this.setBuiltin(">=", ([a, b]) => Number(a) >= Number(b));
+
+    // Arithmetic
+    this.setBuiltin("+", (args) => {
+      if (args.length === 0) return 0;
+      return args.reduce((acc, v) => acc + Number(v), 0);
+    });
+    this.setBuiltin("-", (args) => {
+      if (args.length === 0) return 0;
+      if (args.length === 1) return -Number(args[0]);
+      return args.slice(1).reduce((acc, v) => acc - Number(v), Number(args[0]));
+    });
+    this.setBuiltin("*", (args) => args.reduce((acc, v) => acc * Number(v), 1));
+    this.setBuiltin("/", (args) => {
+      if (args.length === 0) return 0;
+      if (args.length === 1) return 1 / Number(args[0]);
+      return args.slice(1).reduce((acc, v) => acc / Number(v), Number(args[0]));
+    });
+
+    // Eval & I/O
+    this.setBuiltin("eval", ([a], ctx, env) => ctx.eval(a, env));
+    this.setBuiltin("print", (args, ctx) => {
+      const line = args.map((v) => feFormat(v, false)).join(" ") + "\n";
+      ctx.output(line);
+      return args.length > 0 ? args[args.length - 1] : NIL;
     });
   }
-}
-
-if (typeof window !== "undefined") {
-  window.FE_TYPE = FE_TYPE;
-  window.FE_TYPENAMES = FE_TYPENAMES;
-  window.PRIM = PRIM;
-  window.PRIM_NAMES = PRIM_NAMES;
-  window.FeObject = FeObject;
-  window.FeRuntimeError = FeRuntimeError;
-  window.StringStream = StringStream;
-  window.FeContext = FeContext;
 }

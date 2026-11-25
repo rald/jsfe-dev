@@ -1,10 +1,15 @@
 {
-  "name": "fe-lisp-js",
+  "name": "fe-js-interpreter",
   "version": "1.0.0",
-  "description": "ES6 port of rxi's fe Tiny Lisp interpreter with TDD test suite",
+  "description": "Zero-dependency ES6 implementation of rxi/fe for Web and CLI",
   "type": "module",
-  "main": "fe.js",
+  "bin": {
+    "fe": "./cli.js"
+  },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "repl": "node cli.js",
+    "example": "node cli.js example.fe",
+    "test": "node --test test.js",
+    "serve": "npx serve ."
   }
 }

@@ -1,0 +1,16 @@
+; Example fe script
+(= make-counter (fn (n)
+  (fn () (= n (+ n 1)) n)))
+
+(= c (make-counter 0))
+(print (c))
+(print (c))
+
+(= reverse (fn (lst)
+  (= res nil)
+  (while lst
+    (= res (cons (car lst) res))
+    (= lst (cdr lst)))
+  res))
+
+(print (reverse '("cat" "dog" "fox")))

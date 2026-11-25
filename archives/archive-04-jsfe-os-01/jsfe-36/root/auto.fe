@@ -1,5 +1,0 @@
-; auto.fe — OS boot script ("all is a list", main storage: root/)
-(print "[boot] auto.fe evaluating system lists...")
-(load "root/sys.fe")
-(load "root/apps.fe")
-(print "[boot] OS ready. Launch apps from the desktop or REPL.")

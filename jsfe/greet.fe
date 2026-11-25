@@ -1,7 +1,0 @@
-(= greet (fn (name) (print "Hello " name "!")))
-(greet "Fria El Agua")
-
-(= i 0)
-(while (< i 10) 
-  (print i)
-  (= i (+ i 1)))
