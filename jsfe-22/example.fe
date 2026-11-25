@@ -1,0 +1,101 @@
+; Comprehensive example.fe demonstrating all features of the ES6 rxi/fe interpreter
+
+(print "=== 1. Literals, Quotes, Escapes & Dotted Pairs ===")
+(= pair (cons "head" "tail"))
+(print "Pair:" pair "Car:" (car pair) "Cdr:" (cdr pair))
+
+(= escaped "line1\nline2\ttabbed \"quoted\" \\backslash")
+(print "Escaped string:" escaped)
+
+(= quoted-sym 'hello-world)
+(= quoted-list '(alpha beta gamma))
+(print "Quoted sym:" quoted-sym "Quoted list:" quoted-list)
+
+(print "=== 2. Lists, Mutation (setcar/setcdr) & Predicates ===")
+(= nums (list 10 20 30 40))
+(print "Nums:" nums)
+(setcar nums 99)
+(setcdr (cdr nums) (cons 25 (cdr (cdr nums))))
+(print "Mutated nums:" nums)
+(print "Is list atom?" (atom nums) "Is 10 atom?" (atom 10))
+(print "nil is false?" (is nil false) "10 is 10?" (is 10 10))
+
+(= reverse (fn (lst)
+  (= res nil)
+  (while lst
+    (= res (cons (car lst) res))
+    (= lst (cdr lst)))
+  res))
+(print "Reversed list:" (reverse (list "first" "second" "third")))
+
+(print "=== 3. Arithmetic & Comparisons ===")
+(= a 15)
+(= b 4)
+(print "a + b =" (+ a b))
+(print "a - b =" (- a b))
+(print "negate b =" (- b))
+(print "a * b =" (* a b))
+(print "a / b =" (/ a b))
+(print "reciprocal of b =" (/ b))
+(print "Comparisons (< <= == > >=):" (< b a) (<= a 15) (== a 15) (> a b) (>= b a))
+
+(print "=== 4. Closures, Mutation (=), let, if, do & while ===")
+(= make-accumulator (fn (start)
+  (let step 1)
+  (fn (delta)
+    (if delta
+      (= start (+ start delta))
+      (= start (+ start step)))
+    start)))
+
+(= acc (make-accumulator 0))
+(print "Acc +1:" (acc))
+(print "Acc +5:" (acc 5))
+(print "Acc +1:" (acc))
+
+(= scoped-demo (fn (flag)
+  (let x 100)
+  (if flag
+    (do
+      (let x 200)
+      (print "Inside branch x:" x))
+    (print "Else branch x:" x))
+  x))
+(print "Returned outer x:" (scoped-demo t))
+
+(= sum-to (fn (n)
+  (= i 1)
+  (= total 0)
+  (while (<= i n)
+    (= total (+ total i))
+    (= i (+ i 1)))
+  total))
+(print "Sum 1..10:" (sum-to 10))
+
+(print "=== 5. Variadic Functions (fn (first . rest) ...) ===")
+(= summarize (fn (label . items)
+  (do
+    (print "Label:" label "First:" (car items) "Rest:" (cdr items))
+    (cons label items))))
+(print "Summary:" (summarize "scores" 88 92 95))
+
+(print "=== 6. Macros (mac) & Dynamic eval ===")
+(= when (mac (cond body)
+  (list 'if cond body nil)))
+
+(when (> a b)
+  (print "Macro 'when' triggered because a > b"))
+
+(= unless (mac (cond body)
+  (list 'if (list 'is cond nil) body)))
+
+(unless nil
+  (print "Macro 'unless' triggered because cond is nil"))
+
+(= my-list (mac (. items)
+  (cons 'list items)))
+
+(print "Variadic macro list:" (my-list 1 (+ 1 2) "three"))
+
+(= dynamic-expr '(+ (* 6 7) 8))
+(print "Evaluating" dynamic-expr "=>" (eval dynamic-expr))

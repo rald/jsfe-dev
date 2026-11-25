@@ -1,0 +1,15 @@
+{
+  "name": "fe-js-interpreter",
+  "version": "1.0.0",
+  "description": "Zero-dependency ES6 implementation of rxi/fe for Web and CLI",
+  "type": "module",
+  "bin": {
+    "fe": "./cli.js"
+  },
+  "scripts": {
+    "repl": "node cli.js",
+    "example": "node cli.js example.fe",
+    "test": "node --test test.js",
+    "serve": "npx serve ."
+  }
+}
